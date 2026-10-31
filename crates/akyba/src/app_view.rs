@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use akyba_design::{color, radius, space};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AppContext as _, ClickEvent, Context, Entity, FocusHandle, FontWeight, InteractiveElement as _, IntoElement,
     ParentElement as _, PathPromptOptions, Render, StatefulInteractiveElement as _, Styled as _, Window, div, px,
@@ -92,7 +93,14 @@ impl AppView {
                 .py(len(space::SPACE_3))
                 .rounded(theme::corner(radius::RADIUS_SM))
                 .cursor_pointer()
-                .hover(|s| s.bg(theme::fill_hover()))
+                .map(|row| {
+                    // The first line sits under the card's cut corner: a square fill would cross it.
+                    if index == 0 && chrome::cut_corners() {
+                        row.relative().group("recent-line").child(chrome::hover_fill_under_cut("recent-line"))
+                    } else {
+                        row.hover(|s| s.bg(theme::fill_hover()))
+                    }
+                })
                 .child(chrome::icon("folder", icon::LG, theme::color(color::INK_MUTED)))
                 .child(
                     div()

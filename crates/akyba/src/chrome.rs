@@ -381,6 +381,20 @@ pub fn hover_outline(group: &'static str) -> impl IntoElement {
     )
 }
 
+/// A list line's hover fill where it sits `SPACE_1` inside a card's cut corner: the same fill,
+/// its own top right corner cut as a corner button's is, so the gap along the diagonal matches the
+/// gap along the top and the side. Shown only while the pointer is over the hover group `group`.
+pub fn hover_fill_under_cut(group: &'static str) -> impl IntoElement {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .invisible()
+        .group_hover(group, gpui_kit::Styled::visible)
+        .child(cut_surface(gpui_kit::transparent_black(), theme::fill_hover(), 0., corner_button_cut(), Cut::TopRight))
+}
+
 /// A tab: one of a few views of the same place (Files and Changes, open files, repos). In Akyba's
 /// theme a track item; in Cyberdeck words over a bar, the bar lit under the tab you're on.
 pub fn tab(id: impl Into<ElementId>, selected: bool) -> gpui_kit::Stateful<gpui_kit::Div> {
