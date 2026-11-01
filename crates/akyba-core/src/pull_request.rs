@@ -411,20 +411,58 @@ const TAIL: usize = 256;
 pub struct LinkScanner {
     /// The end of the last read, which a link may continue from.
     tail: Vec<u8>,
+    /// Inside the text of a link the program marked (OSC 8): its address was read already.
+    in_marked_link: bool,
 }
 
 impl LinkScanner {
     /// Reads more output and returns the last complete pull request link in it, as
     /// `https://github.com/owner/repo/pull/123`. A link cut off at the end of the read waits for
     /// the next one.
+    ///
+    /// A link the program marked (OSC 8, as Claude Code does) is read from its address, and the
+    /// text it shows is skipped: wrapped in a narrow pane, that text breaks mid-number, and
+    /// `…/pull/2` on one line read as a link of its own took the chip of `…/pull/240`.
     pub fn feed(&mut self, bytes: &[u8]) -> Option<String> {
         const HOST: &[u8] = b"github.com/";
+        const MARK: &[u8] = b"\x1b]8;";
         let mut text = std::mem::take(&mut self.tail);
         text.extend_from_slice(bytes);
         let mut last = None;
         // Everything before `read` has been read; a link cut off at the end starts there.
         let mut read = 0;
-        while let Some(at) = find(&text[read..], HOST).map(|at| read + at) {
+        loop {
+            let host = find(&text[read..], HOST).map(|at| read + at);
+            let mark = find(&text[read..], MARK).map(|at| read + at);
+            if let Some(at) = mark.filter(|&mark| host.is_none_or(|host| mark < host)) {
+                // `ESC ] 8 ; params ; address` ended by BEL or `ESC \`; an empty address ends the link.
+                let start = at + MARK.len();
+                let Some(length) = text[start..].iter().position(|&b| b == 0x07 || b == 0x1b) else {
+                    read = at;
+                    break;
+                };
+                let end = start + length;
+                if text[end] == 0x1b && end + 1 == text.len() {
+                    read = at;
+                    break;
+                }
+                let address = &text[start..end];
+                let address = address.iter().position(|&b| b == b';').map_or(address, |semi| &address[semi + 1..]);
+                self.in_marked_link = !address.is_empty();
+                if let Some(host) = find(address, HOST) {
+                    let from = end - address.len() + host + HOST.len();
+                    if let Link::Found(link, _) = link_at(&text, from) {
+                        last = Some(link);
+                    }
+                }
+                read = end + 1;
+                continue;
+            }
+            let Some(at) = host else { break };
+            if self.in_marked_link {
+                read = at + 1;
+                continue;
+            }
             match link_at(&text, at + HOST.len()) {
                 Link::Found(link, end) => {
                     last = Some(link);
@@ -629,6 +667,25 @@ mod tests {
         assert_eq!(scanner.feed(b"opened https://github.com/acme/acme-web/pu"), None);
         assert_eq!(scanner.feed(b"ll/42"), None, "the number may go on");
         assert_eq!(scanner.feed(b"1 for review").as_deref(), Some("https://github.com/acme/acme-web/pull/421"));
+    }
+
+    #[test]
+    fn a_marked_link_is_read_from_its_address_not_its_wrapped_text() {
+        let mut scanner = LinkScanner::default();
+        // Claude Code marks the link, and a narrow pane wraps its text after `/pull/2`.
+        let open = b"\x1b]8;;https://github.com/acme/acme-web/pull/240\x1b\\";
+        let mut output = open.to_vec();
+        output.extend_from_slice(b"https://github.com/acme/acme-web/pull/2\r\n");
+        assert_eq!(scanner.feed(&output).as_deref(), Some("https://github.com/acme/acme-web/pull/240"));
+        let mut rest = open.to_vec();
+        rest.extend_from_slice(b"40\x1b]8;;\x1b\\ is ready\r\n");
+        assert_eq!(scanner.feed(&rest).as_deref(), Some("https://github.com/acme/acme-web/pull/240"));
+        // After the link ends, a plain one counts again; a mark split between reads waits.
+        assert_eq!(
+            scanner.feed(b"see github.com/acme/acme-web/pull/7 \x1b]8;;https://github.com/acme/acme-web/pu"),
+            Some("https://github.com/acme/acme-web/pull/7".into())
+        );
+        assert_eq!(scanner.feed(b"ll/9\x07"), Some("https://github.com/acme/acme-web/pull/9".into()));
     }
 
     #[test]
