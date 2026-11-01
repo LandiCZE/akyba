@@ -150,7 +150,9 @@ Each pane shows whether its agent is working, waiting for you, done or failed.
 - **Impact**: every file that depends on what changed, nearest first, following imports in
   JavaScript and TypeScript (with `tsconfig` aliases and a monorepo's packages), Rust and Python. In a
   dbt project it follows the lineage down to the exposures (dashboards, apps) that read it.
-- **Pull requests**: each pane shows the one it works on, with its state, from the `gh` CLI. Its
+- **Pull requests**: each pane shows the one it works on, with its state, from the `gh` CLI: the
+  one it's named after (`241`, `#241`, `PR 241`), else one that names its ticket, the last one
+  linked in it, its branch's, or, checked out on no branch, the one ending at its commit. Its
   checks show beside it, and when they fail, the wrench hands them to the pane's agent. Open review
   threads count beside it (💬 2): click to hand them to the agent too. When the repo deploys pull
   requests, ↗ Preview opens this one's. "Edit the pull request's description" (the pane's ⋯) edits it

@@ -522,6 +522,8 @@ struct TabSources {
     link: Option<String>,
     /// The ticket the tab is named after.
     ticket: Option<String>,
+    /// The pull request the tab is named after ("241", "#241", "PR 241").
+    number: Option<u64>,
 }
 
 /// What finds a pull request, so tabs that share one ask `gh` once.
@@ -529,11 +531,14 @@ struct TabSources {
 enum PrLookup {
     Link(String),
     Branch(Checkout),
+    Number(PathBuf, u64),
+    Commit(PathBuf, String),
 }
 
-/// The branch each tab is on, and the pull request each works on: an open one whose title or branch
-/// names its ticket, else the one last linked in it (the agent opened it, or you pasted it), else its
-/// branch's, else a merged or closed one that names its ticket. Slow: runs `git` and `gh`.
+/// The branch each tab is on, and the pull request each works on: the one it's named after, else an
+/// open one whose title or branch names its ticket, else the one last linked in it (the agent opened
+/// it, or you pasted it), else its branch's (or, on no branch, the one ending at its commit), else a
+/// merged or closed one that names its ticket. Slow: runs `git` and `gh`.
 fn read_checkouts(
     tabs: Vec<TabSources>,
 ) -> (HashMap<TabId, Checkout>, HashMap<TabId, PullRequest>, HashMap<TabId, ReviewNotes>) {
@@ -542,18 +547,37 @@ fn read_checkouts(
     let mut found: HashMap<PrLookup, Option<PullRequest>> = HashMap::new();
     let mut for_tickets: HashMap<(PathBuf, String), Option<PullRequest>> = HashMap::new();
     for sources in tabs {
-        let checkout =
-            git::toplevel(&sources.dir).and_then(|root| git::branch(&root).map(|branch| Checkout { root, branch }));
-        let root = checkout.as_ref().map_or(&sources.dir, |checkout| &checkout.root).clone();
+        let toplevel = git::toplevel(&sources.dir);
+        let checkout = toplevel.clone().and_then(|root| git::branch(&root).map(|branch| Checkout { root, branch }));
+        let root = toplevel.clone().unwrap_or_else(|| sources.dir.clone());
         let mut look = |lookup: PrLookup| {
             found
                 .entry(lookup.clone())
                 .or_insert_with(|| match &lookup {
                     PrLookup::Link(link) => github::pull_request(&root, link),
                     PrLookup::Branch(checkout) => github::pull_request(&checkout.root, &checkout.branch),
+                    PrLookup::Number(root, number) => github::pull_request(root, &number.to_string()),
+                    PrLookup::Commit(root, commit) => github::pull_request_for_commit(root, commit),
                 })
                 .clone()
         };
+        // Named after a pull request: that one, whatever the agent links or checks out.
+        if let Some(pull_request) = sources
+            .number
+            .filter(|_| toplevel.is_some())
+            .and_then(|number| look(PrLookup::Number(root.clone(), number)))
+        {
+            if let Some(checkout) = checkout {
+                checkouts.insert(sources.tab, checkout);
+            }
+            pull_requests.insert(sources.tab, pull_request);
+            continue;
+        }
+        // A review checked out at the pull request's commit, on no branch.
+        let detached = toplevel
+            .as_ref()
+            .filter(|_| checkout.is_none())
+            .and_then(|root| git::head(root).map(|commit| PrLookup::Commit(root.clone(), commit)));
         // An open pull request that names the tab's ticket (in its title or branch) wins even over a
         // link, so a link to some other pull request the agent mentions in passing doesn't take the
         // tab's chip. A merged or closed one only counts when nothing else is found.
@@ -567,6 +591,7 @@ fn read_checkouts(
         let pull_request = ticket_open
             .or_else(|| sources.link.and_then(|link| look(PrLookup::Link(link))))
             .or_else(|| checkout.clone().and_then(|checkout| look(PrLookup::Branch(checkout))))
+            .or_else(|| detached.and_then(&mut look))
             .or(for_ticket);
         if let Some(checkout) = checkout {
             checkouts.insert(sources.tab, checkout);
@@ -2146,6 +2171,7 @@ impl Workspace {
                     dir: view.cwd.clone(),
                     link: view.pull_request_link.clone(),
                     ticket: names.into_iter().flatten().find_map(|name| pull_request::ticket_in(name)),
+                    number: names.into_iter().flatten().find_map(|name| pull_request::number_in(name)),
                 }
             })
             .collect();

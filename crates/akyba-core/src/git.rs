@@ -240,6 +240,11 @@ pub fn commit_patch(repo: &Path, hash: &str) -> String {
     run(repo, &["show", "--no-color", "--no-ext-diff", "-M", "--first-parent", "--format=", hash]).unwrap_or_default()
 }
 
+/// The commit checked out, in full, or `None` outside a repository.
+pub fn head(repo: &Path) -> Option<String> {
+    run(repo, &["rev-parse", "HEAD"]).map(|sha| sha.trim().to_owned())
+}
+
 /// The checked-out branch, or `None` when detached or outside a repository.
 pub fn branch(repo: &Path) -> Option<String> {
     run(repo, &["symbolic-ref", "--quiet", "--short", "HEAD"]).map(|name| name.trim().to_owned())

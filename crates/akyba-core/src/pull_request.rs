@@ -375,6 +375,49 @@ pub fn for_ticket(json: &str, ticket: &str) -> Option<PullRequest> {
         .min_by_key(|pr| (matches!(pr.state, PrState::Merged | PrState::Closed), std::cmp::Reverse(pr.number)))
 }
 
+/// The pull request whose branch is at `commit`, from `gh pr list --search <commit> --json …`: a
+/// review checked out without a branch (`gh pr checkout --detach`, a worktree at the pull request's
+/// commit) is on no branch to look it up by. GitHub's search also finds pull requests that only
+/// contain the commit, so only one ending at it counts, open first.
+pub fn for_commit(json: &str, commit: &str) -> Option<PullRequest> {
+    let found: Vec<Raw> = serde_json::from_str(json).ok()?;
+    found
+        .into_iter()
+        .filter_map(Raw::into_pull_request)
+        .filter(|pr| pr.head.as_deref() == Some(commit))
+        .min_by_key(|pr| (matches!(pr.state, PrState::Merged | PrState::Closed), std::cmp::Reverse(pr.number)))
+}
+
+/// The pull request a pane's name is about: `241`, `#241`, `PR 241` or `pr-241`, so a pane you
+/// named after the pull request it reviews shows it, whatever folder its agent works in. A number
+/// among other words ("fix 3 bugs") isn't one; with a mark, `#3`, it is.
+pub fn number_in(name: &str) -> Option<u64> {
+    let words: Vec<&str> = name
+        .split_whitespace()
+        // Claude's titles carry a mark before the name ("✳ 241").
+        .skip_while(|word| !word.chars().any(|c| c.is_ascii_alphanumeric() || c == '#'))
+        .collect();
+    let number = |text: &str| text.parse::<u64>().ok().filter(|&n| n > 0);
+    let marked = |word: &str| {
+        let lower = word.to_ascii_lowercase();
+        let rest = lower.strip_prefix("pr").map_or(lower.as_str(), |rest| rest.trim_start_matches(['-', '_']));
+        rest.strip_prefix('#').map(str::to_owned).or_else(|| (rest.len() < lower.len()).then(|| rest.to_owned()))
+    };
+    if let [only] = words.as_slice()
+        && let Some(n) = number(only)
+    {
+        return Some(n);
+    }
+    words.iter().enumerate().find_map(|(at, word)| {
+        let word = word.trim_end_matches([':', ',', '.', ')', ']']);
+        if let Some(n) = marked(word).and_then(|rest| number(&rest)) {
+            return Some(n);
+        }
+        let next = words.get(at + 1)?.trim_end_matches([':', ',', '.', ')', ']']);
+        word.eq_ignore_ascii_case("pr").then(|| number(next.trim_start_matches('#'))).flatten()
+    })
+}
+
 /// Whether `text` names `ticket` as a whole word, in any case: `ABC-12` is in "abc-12-fix" and
 /// "fix: ABC-12", not in "ABC-123".
 fn names_ticket(text: &str, ticket: &str) -> bool {
@@ -716,6 +759,26 @@ mod tests {
         assert_eq!(for_ticket(list, "ABC-12").map(|pr| pr.number), Some(11));
         assert_eq!(for_ticket(list, "ABC-99"), None);
         assert_eq!(for_ticket("[]", "ABC-12"), None);
+    }
+
+    #[test]
+    fn reads_a_pull_request_number_from_a_pane_name() {
+        for name in ["241", "#241", "✳ 241", "PR 241", "pr #241", "PR-241", "review #241", "pr241"] {
+            assert_eq!(number_in(name), Some(241), "{name}");
+        }
+        for name in ["fix 3 bugs", "ABC-241", "acme-web", "", "0", "prune"] {
+            assert_eq!(number_in(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn finds_the_pull_request_a_commit_is_the_head_of() {
+        let list = r#"[
+            {"number":240,"state":"OPEN","isDraft":false,"url":"u240","title":"Contains it","headRefName":"a","headRefOid":"bbb"},
+            {"number":241,"state":"OPEN","isDraft":false,"url":"u241","title":"Ends at it","headRefName":"b","headRefOid":"aaa"}
+        ]"#;
+        assert_eq!(for_commit(list, "aaa").map(|pr| pr.number), Some(241));
+        assert_eq!(for_commit(list, "ccc"), None);
     }
 
     #[test]

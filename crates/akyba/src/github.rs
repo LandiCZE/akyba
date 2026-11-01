@@ -73,6 +73,13 @@ pub fn pull_request_for_ticket(root: &Path, ticket: &str) -> Option<PullRequest>
     pull_request::for_ticket(&String::from_utf8_lossy(&output.stdout), ticket)
 }
 
+/// The pull request whose branch is at `commit` in the repository at `root`.
+pub fn pull_request_for_commit(root: &Path, commit: &str) -> Option<PullRequest> {
+    let output =
+        gh(root, &["pr", "list", "--state", "all", "--limit", "20", "--search", commit, "--json", GH_LIST_FIELDS])?;
+    pull_request::for_commit(&String::from_utf8_lossy(&output.stdout), commit)
+}
+
 fn gh(root: &Path, args: &[&str]) -> Option<Output> {
     let mut command = Command::new("gh");
     command.args(args).current_dir(root);
