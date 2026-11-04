@@ -34,6 +34,14 @@ pub fn font_size() -> f32 {
     f32::from_bits(FONT_SIZE_BITS.load(std::sync::atomic::Ordering::Relaxed))
 }
 
+/// How wide one character is in a terminal, at the size terminals draw at now: what a pane needs
+/// per column it shows.
+pub fn cell_width(cx: &App) -> Pixels {
+    let points = font_size();
+    let font_id = cx.text_system().resolve_font(&font(fonts::MONO));
+    cx.text_system().em_advance(font_id, px(points)).unwrap_or(px(points * 0.6))
+}
+
 /// Sets the text size every terminal draws at; each lays itself out again on its next frame.
 pub fn set_font_size(size: f32) {
     FONT_SIZE_BITS.store(size.to_bits(), std::sync::atomic::Ordering::Relaxed);

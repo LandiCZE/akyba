@@ -12,6 +12,7 @@ use akyba_core::best_of;
 use akyba_core::checks;
 use akyba_core::clickup::Ticket;
 use akyba_core::git;
+use akyba_core::grid_scroll::{self, Side, Span};
 use akyba_core::layout::{Cell, CellId, Direction, Layout, RowId, TabId};
 use akyba_core::multi_repo;
 use akyba_core::overlap;
@@ -36,8 +37,9 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     Action, AnyElement, AppContext as _, Bounds, ClickEvent, Context, CursorStyle, DragMoveEvent, Entity, FocusHandle,
     Focusable as _, FontWeight, Hsla, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
-    PathPromptOptions, Pixels, Point, PromptLevel, Render, StatefulInteractiveElement as _, Styled as _, Subscription,
-    Window, actions, div, prelude::FluentBuilder as _, px, relative,
+    PathPromptOptions, Pixels, Point, PromptLevel, Render, ScrollHandle, ScrollWheelEvent,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, actions, div, point,
+    prelude::FluentBuilder as _, px, relative,
 };
 
 use crate::changes_view::{ChangesEvent, ChangesView};
@@ -311,6 +313,10 @@ pub struct Workspace {
     /// The pane whose terminal has the keyboard, as of the last frame: the blue ring goes there,
     /// not where the keyboard was last, so reading a file leaves no pane looking focused.
     keyboard_in: Option<TabId>,
+    /// How far the grid has scrolled sideways, when its panes are wider together than the window.
+    grid_scroll: ScrollHandle,
+    /// The grid gliding to rest on a pane's edge, or to a pane being shown; a new scroll stops it.
+    grid_motion: Option<Task<()>>,
     renaming: Option<(TabId, Entity<InputState>)>,
     next_tab: u64,
     focus: FocusHandle,
@@ -990,6 +996,31 @@ fn drop_preview(side: Option<Direction>) -> impl IntoElement {
     }
 }
 
+/// The grid's panes across it, as `grid_scroll` measures them.
+struct GridGeometry {
+    /// How wide the window onto the grid is.
+    viewport: f32,
+    /// How far the grid has scrolled left, and how far it can.
+    scroll: f32,
+    max: f32,
+    panes: Vec<(CellId, Span)>,
+    /// Where a scroll may come to rest.
+    edges: Vec<f32>,
+}
+
+impl GridGeometry {
+    fn span_of(&self, cell: CellId) -> Option<Span> {
+        self.panes.iter().find(|(id, _)| *id == cell).map(|(_, span)| *span)
+    }
+}
+
+/// What a pane adds to its terminal's columns: the panel's padding and the well's inset.
+const PANE_FRAME: f32 = 28.;
+/// How long after the last sideways scroll the grid settles, so a trackpad's glide finishes first.
+const SETTLE_AFTER_MS: u64 = 140;
+/// Frames of a glide, at about 60 a second.
+const GLIDE_STEPS: u16 = 10;
+
 pub fn state_color(state: AgentState) -> Hsla {
     theme::color(match state {
         AgentState::Shell | AgentState::Idle => color::STATUS_IDLE,
@@ -1190,6 +1221,8 @@ impl Workspace {
             names: HashMap::new(),
             unseen: HashSet::new(),
             keyboard_in: None,
+            grid_scroll: ScrollHandle::new(),
+            grid_motion: None,
             renaming: None,
             next_tab: 0,
             focus: cx.focus_handle(),
@@ -3426,6 +3459,7 @@ impl Workspace {
     fn after_layout_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_root(window, cx);
         self.save_session(cx);
+        self.reveal_focused(cx);
         if let Some(front) = self.layout.focused_tab() {
             if self.renaming.is_none()
                 && let Some(view) = self.terminals.get(&front)
@@ -4158,8 +4192,11 @@ impl Workspace {
     fn render_grid(&self, cx: &mut Context<Self>) -> AnyElement {
         let maximized = self.layout.maximized;
         let row_sizes: Vec<f32> = self.layout.rows.iter().map(|row| row.size).collect();
-        let mut grid = div().id("grid").flex().flex_col().flex_1().min_h_0().on_drag_move(cx.listener(
-            move |this, event: &DragMoveEvent<GridDivider>, _, cx| {
+        // As wide as the window, or wider when the panes would get too narrow to read; the window
+        // then scrolls along it.
+        let narrowest = self.grid_min_width(cx);
+        let mut grid = div().id("grid").flex().flex_col().flex_none().w_full().min_w(px(narrowest)).on_drag_move(
+            cx.listener(move |this, event: &DragMoveEvent<GridDivider>, _, cx| {
                 if let GridDivider::Rows(index) = *event.drag(cx) {
                     let at =
                         f32::from(event.event.position.y - event.bounds.top()) / f32::from(event.bounds.size.height);
@@ -4167,8 +4204,8 @@ impl Workspace {
                     this.layout.resize_rows(&sizes);
                     cx.notify();
                 }
-            },
-        ));
+            }),
+        );
         // A maximised pane stands back from the edges, so what it covers reads as hidden, not gone.
         if maximized.is_some() {
             grid = grid.p(len(space::SPACE_6));
@@ -4210,7 +4247,184 @@ impl Workspace {
             }
             grid = grid.child(row_element);
         }
-        grid.into_any_element()
+        let edges = self.render_hidden_calls(cx);
+        div()
+            .relative()
+            .flex()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .child(
+                div()
+                    .id("grid-scroll")
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_x_scroll()
+                    // A swipe that starts sideways stays sideways, so the terminals' own history
+                    // doesn't drift while the grid moves, nor the grid while a history scrolls.
+                    .restrict_scroll_to_axis()
+                    .track_scroll(&self.grid_scroll)
+                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+                        let sideways = match event.delta {
+                            gpui_kit::ScrollDelta::Pixels(delta) => delta.x != px(0.),
+                            gpui_kit::ScrollDelta::Lines(delta) => delta.x != 0.,
+                        };
+                        if sideways {
+                            this.settle_grid_soon(cx);
+                        }
+                    }))
+                    .child(grid),
+            )
+            .children(edges)
+            .into_any_element()
+    }
+
+    /// How wide the grid must be at least so no pane is narrower than the setting asks: nothing
+    /// while a pane is maximised or the setting squeezes them all in.
+    fn grid_min_width(&self, cx: &gpui_kit::App) -> f32 {
+        let columns = self.settings.terminal.narrowest_pane;
+        if columns == 0 || self.layout.maximized.is_some() {
+            return 0.;
+        }
+        let across = self.layout.rows.iter().map(|row| row.cells.len()).max().unwrap_or(0);
+        let narrowest = f32::from(columns) * f32::from(akyba_terminal::element::cell_width(cx)) + PANE_FRAME;
+        grid_scroll::content_width(0., across, narrowest, chrome::pane_gap())
+    }
+
+    /// Where the grid's panes sit across it, from the window's width as last drawn and the layout
+    /// as it is now, so a pane just added can be scrolled to before it's drawn.
+    fn grid_geometry(&self, cx: &gpui_kit::App) -> GridGeometry {
+        let viewport = f32::from(self.grid_scroll.bounds().size.width);
+        let width = viewport.max(self.grid_min_width(cx));
+        let max = (width - viewport).max(0.);
+        let scroll = (-f32::from(self.grid_scroll.offset().x)).clamp(0., max);
+        let gap = chrome::pane_gap();
+        let mut panes = Vec::new();
+        let mut edges: Vec<f32> = Vec::new();
+        for row in &self.layout.rows {
+            let sizes: Vec<f32> = row.cells.iter().map(|cell| cell.size).collect();
+            let spans = grid_scroll::spans(&sizes, width, gap);
+            // The busiest row's edges are where a scroll rests: they set how wide the grid is.
+            if spans.len() > edges.len() {
+                edges = spans.iter().map(|span| span.left).collect();
+            }
+            panes.extend(row.cells.iter().map(|cell| cell.id).zip(spans));
+        }
+        GridGeometry { viewport, scroll, max, panes, edges }
+    }
+
+    /// After a sideways scroll stops (the trackpad's glide included), the grid comes to rest on
+    /// the nearest pane's edge.
+    fn settle_grid_soon(&mut self, cx: &mut Context<Self>) {
+        self.grid_motion = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(SETTLE_AFTER_MS)).await;
+            let _ = this.update(cx, |this, cx| {
+                let geometry = this.grid_geometry(cx);
+                if geometry.max > 0. {
+                    let to = grid_scroll::settle(geometry.scroll, &geometry.edges, geometry.max);
+                    this.glide_grid(to, cx);
+                }
+            });
+        }));
+    }
+
+    /// Scrolls the grid so the focused pane is wholly in sight, when it isn't.
+    fn reveal_focused(&mut self, cx: &mut Context<Self>) {
+        let Some(focused) = self.layout.focused else { return };
+        let geometry = self.grid_geometry(cx);
+        let Some(span) = geometry.span_of(focused) else { return };
+        if let Some(to) = grid_scroll::reveal(span, geometry.scroll, geometry.viewport, geometry.max) {
+            self.glide_grid(to, cx);
+        }
+    }
+
+    /// Moves the grid to `to` (how far scrolled) in a few quick frames, easing out.
+    fn glide_grid(&mut self, to: f32, cx: &mut Context<Self>) {
+        let from = -f32::from(self.grid_scroll.offset().x);
+        if (to - from).abs() < 1. {
+            self.grid_motion = None;
+            return;
+        }
+        let handle = self.grid_scroll.clone();
+        self.grid_motion = Some(cx.spawn(async move |this, cx| {
+            for step in 1..=GLIDE_STEPS {
+                cx.background_executor().timer(Duration::from_millis(16)).await;
+                let progress = f32::from(step) / f32::from(GLIDE_STEPS);
+                let eased = 1. - (1. - progress).powi(3);
+                handle.set_offset(point(px(-(from + (to - from) * eased)), handle.offset().y));
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    return;
+                }
+            }
+        }));
+    }
+
+    /// What a pane would light its ring for, when it's out of sight: orange while an agent in it
+    /// waits for you (seen or not, it's still stuck), green for a turn that ended unseen.
+    fn pane_call(&self, cell: &Cell, cx: &gpui_kit::App) -> Option<AgentState> {
+        let states: Vec<(TabId, AgentState)> = cell.tabs.iter().map(|tab| (*tab, self.tab_state(*tab, cx))).collect();
+        let waiting = states.iter().any(|(tab, state)| {
+            *state == AgentState::NeedsYou || (*state == AgentState::Error && self.unseen.contains(tab))
+        });
+        if waiting {
+            return Some(AgentState::NeedsYou);
+        }
+        states
+            .iter()
+            .any(|(tab, state)| *state == AgentState::YourTurn && self.unseen.contains(tab))
+            .then_some(AgentState::YourTurn)
+    }
+
+    /// The grid's edges lit for agents scrolled out of sight past them, orange before green; a
+    /// click shows the nearest of them.
+    fn render_hidden_calls(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        if self.layout.maximized.is_some() {
+            return Vec::new();
+        }
+        let geometry = self.grid_geometry(cx);
+        if geometry.max <= 0. {
+            return Vec::new();
+        }
+        // For each side: the most urgent call, and the nearest pane making it.
+        let mut calls: [Option<(AgentState, CellId, f32)>; 2] = [None, None];
+        for row in &self.layout.rows {
+            for cell in &row.cells {
+                let Some(span) = geometry.span_of(cell.id) else { continue };
+                let Some(side) = grid_scroll::hidden_side(span, geometry.scroll, geometry.viewport) else { continue };
+                let Some(call) = self.pane_call(cell, cx) else { continue };
+                let (slot, distance) = match side {
+                    Side::Left => (0, geometry.scroll - span.right),
+                    Side::Right => (1, span.left - geometry.scroll - geometry.viewport),
+                };
+                let better = calls[slot].is_none_or(|(held, _, held_distance)| {
+                    let urgent = call == AgentState::NeedsYou;
+                    let held_urgent = held == AgentState::NeedsYou;
+                    (urgent && !held_urgent) || (urgent == held_urgent && distance < held_distance)
+                });
+                if better {
+                    calls[slot] = Some((call, cell.id, distance));
+                }
+            }
+        }
+        calls
+            .into_iter()
+            .enumerate()
+            .filter_map(|(slot, call)| call.map(|(state, cell, _)| (slot == 1, state, cell)))
+            .map(|(right, state, cell)| {
+                let tip = if state == AgentState::NeedsYou {
+                    "Show the agent waiting for you"
+                } else {
+                    "Show the agent that finished"
+                };
+                chrome::edge_glow(if right { "edge-right" } else { "edge-left" }, right, state_color(state))
+                    .tooltip(chrome::tip(tip))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.update_layout(window, cx, |layout| layout.focus_cell(cell));
+                    }))
+                    .into_any_element()
+            })
+            .collect()
     }
 
     /// Which panels are on screen (none while a pane is maximised, as it covers them all), for

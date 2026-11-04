@@ -15,6 +15,8 @@ Each pane shows whether its agent is working, waiting for you, done or failed.
 
 - A pane that needs you rings **orange**, one that's done rings **green**, until you type or click
   in it. The blue ring marks the pane your keyboard is in, and only while it's there.
+- When the grid is scrolled and such a pane is out of sight, the grid's edge on its side lights up
+  in its colour, orange before green. Click the edge to go to it.
 - The title bar counts them, and ⌘⇧A jumps to the next one that needs you. Click a count for what
   each waits for: a permission with the command or file it's for, a question, a finished turn with
   the start of its last words, a failure. Allow or deny a permission right there (Akyba presses the
@@ -73,6 +75,10 @@ Each pane shows whether its agent is working, waiting for you, done or failed.
   Maximise a pane over everything from its ⋯, or ⌘⇧↩. Panes share the space
   evenly whenever one opens or closes; drag a divider to change that, or double-click it to even
   out its two panes. ⌘⌃= evens out them all.
+- Panes stay at least 80 characters wide (Settings → Terminal → Narrowest pane). With more in a row
+  than fit, the grid scrolls sideways instead of squeezing them: two fingers on the trackpad, or
+  Shift and the wheel. It comes to rest on a pane's edge, and going to a pane out of sight scrolls
+  it into view.
 - A real terminal underneath (alacritty's engine), so TUIs, colours and the mouse work as they should.
 - Drop a file, a screenshot say, on a terminal to type its path, so the agent attaches it; the
   terminal it will land in lights up while you drag. Pasting works the same: copied files (from

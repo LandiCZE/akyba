@@ -18,6 +18,7 @@ pub mod format;
 pub mod fuzzy;
 pub mod git;
 pub mod git_graph;
+pub mod grid_scroll;
 pub mod hunks;
 pub mod imports;
 pub mod instructions;

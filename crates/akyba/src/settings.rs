@@ -129,7 +129,7 @@ impl Default for EditorSettings {
 }
 
 /// How the terminals behave.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TerminalSettings {
     /// Option sends Escape before the key (Meta, as shells and editors expect) instead of typing
@@ -137,7 +137,19 @@ pub struct TerminalSettings {
     pub option_as_meta: bool,
     /// Selecting text copies it, as soon as the mouse is let go.
     pub copy_on_select: bool,
+    /// How many characters wide a pane stays at least. With more panes in a row than fit, the
+    /// grid scrolls sideways instead of squeezing them. Zero squeezes them all into the window.
+    pub narrowest_pane: u16,
 }
+
+impl Default for TerminalSettings {
+    fn default() -> Self {
+        Self { option_as_meta: false, copy_on_select: false, narrowest_pane: NARROWEST_PANE }
+    }
+}
+
+/// Wide enough for what most programs expect of a terminal.
+pub const NARROWEST_PANE: u16 = 80;
 
 /// How a project starts an agent on a ClickUp ticket. Kept in Akyba's settings, never in the
 /// project's repository.

@@ -475,6 +475,14 @@ impl TerminalView {
     }
 
     fn scroll_wheel(&mut self, event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // A sideways swipe moves the grid, not this terminal's history.
+        let sideways = match event.delta {
+            ScrollDelta::Lines(delta) => delta.x.abs() > delta.y.abs(),
+            ScrollDelta::Pixels(delta) => delta.x.abs() > delta.y.abs(),
+        };
+        if sideways {
+            return;
+        }
         let lines = match event.delta {
             ScrollDelta::Lines(delta) => delta.y,
             ScrollDelta::Pixels(delta) => f32::from(delta.y) / f32::from(window.line_height()),

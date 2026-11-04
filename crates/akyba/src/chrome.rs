@@ -914,6 +914,40 @@ pub fn sidebar_header(name: &str, detail: &str, action: impl IntoElement) -> imp
         .child(action)
 }
 
+/// The grid's edge lit in an agent's colour when that agent is scrolled out of sight on that
+/// side: a line along the edge, fading into the grid, the way a pane's own ring would show.
+pub fn edge_glow(id: &'static str, right: bool, color: gpui_kit::Hsla) -> gpui_kit::Stateful<gpui_kit::Div> {
+    let faded = color.opacity(0.);
+    let toward = if right { 90. } else { 270. };
+    div()
+        .id(id)
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .when(right, gpui_kit::Styled::right_0)
+        .when(!right, gpui_kit::Styled::left_0)
+        .w(px(EDGE_GLOW_WIDTH))
+        .cursor_pointer()
+        .bg(gpui_kit::linear_gradient(
+            toward,
+            gpui_kit::linear_color_stop(faded, 0.),
+            gpui_kit::linear_color_stop(color.opacity(0.16), 1.),
+        ))
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .when(right, gpui_kit::Styled::right_0)
+                .when(!right, gpui_kit::Styled::left_0)
+                .w(px(1.))
+                .bg(color.opacity(0.7)),
+        )
+}
+
+/// Wide enough to catch the eye and the pointer, narrow enough to leave the pane under it usable.
+const EDGE_GLOW_WIDTH: f32 = 24.;
+
 /// What the grid shows with no terminal open: a headline in two weights, one sentence and the
 /// action, over the theme's empty backdrop, with Akyba's mark above them where the theme has it.
 pub fn empty_grid(new_terminal: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut App) + 'static) -> AnyElement {
