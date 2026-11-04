@@ -1,6 +1,6 @@
 //! The grid wider than the window: how wide it gets when every pane keeps a readable width, where
-//! each pane sits across it, where a sideways scroll comes to rest, and which panes are out of
-//! sight on either side. Distances are in pixels; `scroll` is how far the grid has moved left.
+//! each pane sits across it, and which panes are out of sight on either side. Distances are in
+//! pixels; `scroll` is how far the grid has moved left.
 
 /// A pane's place across the grid, from its left edge to its right.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -68,17 +68,6 @@ pub fn hidden_side(span: Span, scroll: f32, viewport: f32) -> Option<Side> {
     Some(if span.center() < scroll + viewport / 2. { Side::Left } else { Side::Right })
 }
 
-/// Where a scroll comes to rest: the nearest pane's left edge, or the very end, so the pane at
-/// the window's left edge is never cut in half.
-pub fn settle(scroll: f32, edges: &[f32], max: f32) -> f32 {
-    edges
-        .iter()
-        .map(|edge| edge.clamp(0., max))
-        .chain([0., max])
-        .min_by(|a, b| (a - scroll).abs().total_cmp(&(b - scroll).abs()))
-        .unwrap_or(scroll)
-}
-
 /// How far to scroll for a pane to be wholly in sight, moving as little as it can; none when it
 /// already is. A pane wider than the window shows from its left edge.
 pub fn reveal(span: Span, scroll: f32, viewport: f32, max: f32) -> Option<f32> {
@@ -122,15 +111,6 @@ mod tests {
         let first = Span { left: 0., right: 500. };
         assert_eq!(hidden_side(first, 300., 1200.), Some(Side::Left));
         assert_eq!(hidden_side(first, 200., 1200.), None);
-    }
-
-    #[test]
-    fn a_scroll_rests_on_the_nearest_pane_edge_or_the_end() {
-        let edges = [0., 504., 1008., 1512.];
-        assert!((settle(230., &edges, 1400.)).abs() < 0.01);
-        assert!((settle(300., &edges, 1400.) - 504.).abs() < 0.01);
-        // The last edge is past the end, so the end is where it rests.
-        assert!((settle(1450., &edges, 1400.) - 1400.).abs() < 0.01);
     }
 
     #[test]

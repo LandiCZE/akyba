@@ -37,9 +37,8 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     Action, AnyElement, AppContext as _, Bounds, ClickEvent, Context, CursorStyle, DragMoveEvent, Entity, FocusHandle,
     Focusable as _, FontWeight, Hsla, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
-    PathPromptOptions, Pixels, Point, PromptLevel, Render, ScrollHandle, ScrollWheelEvent,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, actions, div, point,
-    prelude::FluentBuilder as _, px, relative,
+    PathPromptOptions, Pixels, Point, PromptLevel, Render, ScrollHandle, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Task, Window, actions, div, point, prelude::FluentBuilder as _, px, relative,
 };
 
 use crate::changes_view::{ChangesEvent, ChangesView};
@@ -317,7 +316,7 @@ pub struct Workspace {
     keyboard_in: Option<TabId>,
     /// How far the grid has scrolled sideways, when its panes are wider together than the window.
     grid_scroll: ScrollHandle,
-    /// The grid gliding to rest on a pane's edge, or to a pane being shown; a new scroll stops it.
+    /// The grid gliding to a pane being shown.
     grid_motion: Option<Task<()>>,
     renaming: Option<(TabId, Entity<InputState>)>,
     next_tab: u64,
@@ -1006,8 +1005,6 @@ struct GridGeometry {
     scroll: f32,
     max: f32,
     panes: Vec<(CellId, Span)>,
-    /// Where a scroll may come to rest.
-    edges: Vec<f32>,
 }
 
 impl GridGeometry {
@@ -1018,8 +1015,6 @@ impl GridGeometry {
 
 /// What a pane adds to its terminal's columns: the panel's padding and the well's inset.
 const PANE_FRAME: f32 = 28.;
-/// How long after the last sideways scroll the grid settles, so a trackpad's glide finishes first.
-const SETTLE_AFTER_MS: u64 = 140;
 /// Frames of a glide, at about 60 a second.
 const GLIDE_STEPS: u16 = 10;
 
@@ -4267,15 +4262,6 @@ impl Workspace {
                     // doesn't drift while the grid moves, nor the grid while a history scrolls.
                     .restrict_scroll_to_axis()
                     .track_scroll(&self.grid_scroll)
-                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
-                        let sideways = match event.delta {
-                            gpui_kit::ScrollDelta::Pixels(delta) => delta.x != px(0.),
-                            gpui_kit::ScrollDelta::Lines(delta) => delta.x != 0.,
-                        };
-                        if sideways {
-                            this.settle_grid_soon(cx);
-                        }
-                    }))
                     .child(grid),
             )
             .children(edges)
@@ -4318,32 +4304,12 @@ impl Workspace {
         let scroll = (-f32::from(self.grid_scroll.offset().x)).clamp(0., max);
         let gap = chrome::pane_gap();
         let mut panes = Vec::new();
-        let mut edges: Vec<f32> = Vec::new();
         for row in &self.layout.rows {
             let sizes: Vec<f32> = row.cells.iter().map(|cell| cell.size).collect();
             let spans = grid_scroll::spans(&sizes, width, gap);
-            // The busiest row's edges are where a scroll rests: they set how wide the grid is.
-            if spans.len() > edges.len() {
-                edges = spans.iter().map(|span| span.left).collect();
-            }
             panes.extend(row.cells.iter().map(|cell| cell.id).zip(spans));
         }
-        GridGeometry { viewport, scroll, max, panes, edges }
-    }
-
-    /// After a sideways scroll stops (the trackpad's glide included), the grid comes to rest on
-    /// the nearest pane's edge.
-    fn settle_grid_soon(&mut self, cx: &mut Context<Self>) {
-        self.grid_motion = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_millis(SETTLE_AFTER_MS)).await;
-            let _ = this.update(cx, |this, cx| {
-                let geometry = this.grid_geometry(cx);
-                if geometry.max > 0. {
-                    let to = grid_scroll::settle(geometry.scroll, &geometry.edges, geometry.max);
-                    this.glide_grid(to, cx);
-                }
-            });
-        }));
+        GridGeometry { viewport, scroll, max, panes }
     }
 
     /// Scrolls the grid so the focused pane is wholly in sight, when it isn't.
