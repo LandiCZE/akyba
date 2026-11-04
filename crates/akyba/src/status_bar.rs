@@ -20,7 +20,7 @@ use crate::editor_view::{EditorView, ServerState};
 use crate::problems_view;
 use crate::theme::TypeScale as _;
 use crate::theme::{self, len};
-use crate::workspace::{OpenSettings, ToggleEditor, ToggleSidebar, ToggleTickets, Workspace};
+use crate::workspace::{OpenSettings, ToggleEditor, ToggleGridScroll, ToggleSidebar, ToggleTickets, Workspace};
 use akyba_design::icon;
 use akyba_design::text;
 use akyba_design::tone;
@@ -157,6 +157,7 @@ impl StatusBar {
     fn render_toggles(&self, cx: &App) -> Vec<AnyElement> {
         let Some(workspace) = self.workspace.upgrade() else { return Vec::new() };
         let (sidebar, editor, tickets) = workspace.read(cx).panels_shown();
+        let scrolls = workspace.read(cx).grid_scrolls();
         let toggle = |id: &'static str, icon: &str, on: bool| {
             Self::item(id)
                 .justify_center()
@@ -177,6 +178,12 @@ impl StatusBar {
                 .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleEditor), cx))
                 .into_any_element(),
         ];
+        toggles.push(
+            toggle("toggle-grid-scroll", "gallery-horizontal-end", scrolls)
+                .tooltip(chrome::tip_for("Scroll panes sideways, on or off", ToggleGridScroll))
+                .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleGridScroll), cx))
+                .into_any_element(),
+        );
         // Only with ClickUp connected: without it there's nothing to show.
         if let Some(tickets) = tickets {
             toggles.push(

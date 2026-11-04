@@ -75,6 +75,7 @@ actions!(
         FocusDown,
         ToggleMaximize,
         EvenOutPanes,
+        ToggleGridScroll,
         NextAttention,
         Paste,
         Copy,
@@ -169,6 +170,7 @@ pub fn commands() -> Vec<(&'static str, &'static str, Box<dyn gpui_kit::Action>)
         ("Previous pane", "arrow-left", Box::new(PreviousTab)),
         ("Maximise the pane", "maximize-2", Box::new(ToggleMaximize)),
         ("Even out the panes", "columns-2", Box::new(EvenOutPanes)),
+        ("Scroll panes sideways, on or off", "gallery-horizontal-end", Box::new(ToggleGridScroll)),
         ("Go to the next agent that needs you", "bot", Box::new(NextAttention)),
         ("New agent", "square-plus", Box::new(OpenTicketPicker)),
         ("Send to several agents", "send", Box::new(SendToSeveral)),
@@ -4284,12 +4286,27 @@ impl Workspace {
     /// while a pane is maximised or the setting squeezes them all in.
     fn grid_min_width(&self, cx: &gpui_kit::App) -> f32 {
         let columns = self.settings.terminal.narrowest_pane;
-        if columns == 0 || self.layout.maximized.is_some() {
+        if !self.settings.terminal.scroll_grid || columns == 0 || self.layout.maximized.is_some() {
             return 0.;
         }
         let across = self.layout.rows.iter().map(|row| row.cells.len()).max().unwrap_or(0);
         let narrowest = f32::from(columns) * f32::from(akyba_terminal::element::cell_width(cx)) + PANE_FRAME;
         grid_scroll::content_width(0., across, narrowest, chrome::pane_gap())
+    }
+
+    /// Whether panes keep a readable width and the grid scrolls sideways, for its toggle.
+    pub fn grid_scrolls(&self) -> bool {
+        self.settings.terminal.scroll_grid
+    }
+
+    /// Turns the sideways-scrolling grid on or off; off, every pane is back in the window.
+    fn toggle_grid_scroll(&mut self, cx: &mut Context<Self>) {
+        self.change_settings(|settings| settings.terminal.scroll_grid = !settings.terminal.scroll_grid, cx);
+        if !self.settings.terminal.scroll_grid {
+            self.grid_motion = None;
+            self.grid_scroll.set_offset(point(px(0.), px(0.)));
+        }
+        cx.notify();
     }
 
     /// Where the grid's panes sit across it, from the window's width as last drawn and the layout
@@ -4977,6 +4994,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &EvenOutPanes, window, cx| {
                 this.update_layout(window, cx, Layout::even_out);
             }))
+            .on_action(cx.listener(|this, _: &ToggleGridScroll, _, cx| this.toggle_grid_scroll(cx)))
             .on_action(cx.listener(|this, _: &NextAttention, window, cx| this.next_attention(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
             .on_action(cx.listener(|this, _: &ToggleEditor, _, cx| this.toggle_editor(cx)))

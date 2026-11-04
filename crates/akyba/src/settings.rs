@@ -137,14 +137,17 @@ pub struct TerminalSettings {
     pub option_as_meta: bool,
     /// Selecting text copies it, as soon as the mouse is let go.
     pub copy_on_select: bool,
-    /// How many characters wide a pane stays at least. With more panes in a row than fit, the
-    /// grid scrolls sideways instead of squeezing them. Zero squeezes them all into the window.
+    /// Panes keep `narrowest_pane` characters at least, and the grid scrolls sideways when more
+    /// are in a row than fit. Off: every pane is squeezed into the window.
+    pub scroll_grid: bool,
+    /// How many characters wide a pane stays at least, while the grid scrolls. Zero, as an
+    /// earlier Akyba wrote "Fit", squeezes them all in.
     pub narrowest_pane: u16,
 }
 
 impl Default for TerminalSettings {
     fn default() -> Self {
-        Self { option_as_meta: false, copy_on_select: false, narrowest_pane: NARROWEST_PANE }
+        Self { option_as_meta: false, copy_on_select: false, scroll_grid: true, narrowest_pane: NARROWEST_PANE }
     }
 }
 

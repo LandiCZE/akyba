@@ -443,11 +443,19 @@ impl SettingsView {
             ),
             Row::new(
                 Section::Terminal,
+                "Scroll panes sideways",
+                "Panes keep a readable width, and with more in a row than fit, the grid scrolls sideways (two fingers on the trackpad, or Shift and the wheel). Off: every pane is squeezed into the window. ⌘⌥G turns it on and off.",
+                self.switch("scroll-grid", settings.terminal.scroll_grid, |settings, on| {
+                    settings.terminal.scroll_grid = on;
+                }),
+            ),
+            Row::new(
+                Section::Terminal,
                 "Narrowest pane",
-                "How many characters wide a pane stays at least. With more panes in a row than fit, the grid scrolls sideways (two fingers on the trackpad, or Shift and the wheel). Fit squeezes them all into the window.",
+                "How many characters wide a pane stays at least while the grid scrolls sideways.",
                 self.choice(
                     "narrowest-pane",
-                    &[("Fit", 0), ("60", 60), ("80", 80), ("100", 100), ("120", 120)],
+                    &[("60", 60), ("80", 80), ("100", 100), ("120", 120)],
                     settings.terminal.narrowest_pane,
                     |settings, value| settings.terminal.narrowest_pane = value,
                 ),

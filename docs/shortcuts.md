@@ -13,6 +13,7 @@
 | ⌘⇧[ / ⌘⇧]    | Previous / next pane                                 |
 | ⌘⇧↩          | Maximise the focused pane                            |
 | ⌘⌃=          | Even out the panes: every row and pane the same size |
+| ⌘⌥G          | Scroll panes sideways, on or off                     |
 | ⌘⇧A          | Jump to the next agent that needs you                |
 | ⌘B / ⌘J      | Toggle the sidebar / the editor                      |
 | ⌘O           | Add a repo                                           |

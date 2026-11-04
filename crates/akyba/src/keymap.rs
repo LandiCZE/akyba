@@ -12,8 +12,8 @@ use crate::workspace::{
     FocusPane1, FocusPane2, FocusPane3, FocusPane4, FocusPane5, FocusPane6, FocusPane7, FocusPane8, FocusPane9,
     FocusRight, FocusUp, GoToFile, NewTab, NextAttention, NextTab, OpenProject, OpenSettings, OpenTicketPicker,
     PreviousTab, SaveFile, SearchSessions, SendToSeveral, ShowHistory, ShowImpact, ShowRoutines, ShowWorktrees,
-    SplitDown, SplitRight, TextBigger, TextReset, TextSmaller, ToggleEditor, ToggleMaximize, ToggleSidebar,
-    ToggleTickets,
+    SplitDown, SplitRight, TextBigger, TextReset, TextSmaller, ToggleEditor, ToggleGridScroll, ToggleMaximize,
+    ToggleSidebar, ToggleTickets,
 };
 
 /// One shortcut a user can change.
@@ -46,6 +46,7 @@ pub const SHORTCUTS: &[Shortcut] = &[
     shortcut!("previous-tab", "Previous pane", "Terminals", ["cmd-shift-["], PreviousTab),
     shortcut!("maximize", "Maximise the pane", "Terminals", ["cmd-shift-enter"], ToggleMaximize),
     shortcut!("even-out", "Even out the panes", "Terminals", ["cmd-ctrl-="], EvenOutPanes),
+    shortcut!("scroll-grid", "Scroll panes sideways, on or off", "Terminals", ["cmd-alt-g"], ToggleGridScroll),
     shortcut!("next-attention", "Next agent that needs you", "Terminals", ["cmd-shift-a"], NextAttention),
     shortcut!("focus-left", "Pane to the left", "Moving around", ["cmd-alt-left"], FocusLeft),
     shortcut!("focus-right", "Pane to the right", "Moving around", ["cmd-alt-right"], FocusRight),

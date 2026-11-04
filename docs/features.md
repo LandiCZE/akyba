@@ -78,7 +78,8 @@ Each pane shows whether its agent is working, waiting for you, done or failed.
 - Panes stay at least 80 characters wide (Settings → Terminal → Narrowest pane). With more in a row
   than fit, the grid scrolls sideways instead of squeezing them: two fingers on the trackpad, or
   Shift and the wheel. It comes to rest on a pane's edge, and going to a pane out of sight scrolls
-  it into view.
+  it into view. Turn it off and on with ⌘⌥G, the status bar's toggle or Terminal → Scroll Panes
+  Sideways; off, every pane is squeezed into the window.
 - A real terminal underneath (alacritty's engine), so TUIs, colours and the mouse work as they should.
 - Drop a file, a screenshot say, on a terminal to type its path, so the agent attaches it; the
   terminal it will land in lights up while you drag. Pasting works the same: copied files (from
