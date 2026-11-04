@@ -19,7 +19,7 @@ and a clear signal when an agent needs you.
 <a href="docs/faq.md">FAQ</a>
 
 <a href="https://github.com/itsjonasarden/akyba/releases/latest"><img src="https://img.shields.io/github/v/release/itsjonasarden/akyba?label=release&color=2f6bff" alt="Latest release" /></a>
-<img src="https://img.shields.io/badge/macOS-13%2B-555" alt="macOS 13 or newer" />
+<img src="https://img.shields.io/badge/macOS-12%2B-555" alt="macOS 12 or newer" />
 <a href="LICENSE"><img src="https://img.shields.io/github/license/itsjonasarden/akyba?color=555" alt="MIT licence" /></a>
 
 </div>
@@ -66,7 +66,7 @@ keeps the files and diffs they touch one click away. It isn't an IDE; it's where
 Download Akyba for your Mac:
 [Apple Silicon](https://github.com/itsjonasarden/akyba/releases/latest/download/Akyba-apple-silicon.dmg)
 (M1 and later) or [Intel](https://github.com/itsjonasarden/akyba/releases/latest/download/Akyba-intel.dmg).
-Open the disk image and drag Akyba to Applications. It runs on macOS 13 or newer, with [Claude Code](https://claude.com/claude-code),
+Open the disk image and drag Akyba to Applications. It runs on macOS 12 (Monterey) or newer, with [Claude Code](https://claude.com/claude-code),
 [Codex](https://developers.openai.com/codex) or both.
 
 > [!NOTE]

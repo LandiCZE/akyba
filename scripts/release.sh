@@ -61,7 +61,7 @@ for kind in apple-silicon intel; do
       <pubDate>$date</pubDate>
       <sparkle:version>$version</sparkle:version>
       <sparkle:shortVersionString>$version</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
       <description><![CDATA[<ul>$html</ul>]]></description>
       <enclosure url="$url" type="application/octet-stream" $signature />
     </item>
