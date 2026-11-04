@@ -2,12 +2,10 @@
 //! calls Akyba makes with it. Everything here blocks, so callers run it off the main thread.
 //! Without a token, nothing about ClickUp shows anywhere.
 
-use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
-use std::path::PathBuf;
-use std::time::Duration;
+use akyba_core::clickup;
+use akyba_core::tickets::Ticket;
 
-use akyba_core::clickup::{self, Ticket};
+use crate::private_file;
 
 /// Where versions before 0.1.13 kept the token. Even with a stable signature, macOS asked for the
 /// login password to read it after every update, which a Mac app without an Apple Developer ID
@@ -19,15 +17,12 @@ const API: &str = "https://api.clickup.com/api/v2";
 /// one person is not a list anyone picks from.
 const MAX_PAGES: usize = 5;
 
-/// The token's file, in Akyba's own folder (a test's folder, for a test).
-fn token_file() -> Option<PathBuf> {
-    crate::settings::data_dir().map(|dir| dir.join("clickup-token"))
-}
+/// The token's file, in Akyba's own folder.
+const TOKEN_FILE: &str = "clickup-token";
 
 /// The saved token, if one was set.
 pub fn token() -> Option<String> {
-    let saved = token_file().and_then(|path| std::fs::read_to_string(path).ok());
-    if let Some(token) = saved {
+    if let Some(token) = private_file::read(TOKEN_FILE) {
         return Some(token.trim().to_owned()).filter(|token| !token.is_empty());
     }
     // A run with its own settings folder (the demo, a spike) is a test: it leaves the Keychain
@@ -48,35 +43,14 @@ pub fn token() -> Option<String> {
 
 /// Saves the token where only your user can read it (permissions 0600).
 pub fn save_token(token: &str) -> Result<(), String> {
-    let path = token_file().ok_or("Akyba can't find its folder to save the token in.")?;
-    let refused = |error: std::io::Error| format!("Akyba couldn't save the token: {error}");
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(refused)?;
-    }
-    let mut file =
-        std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path).map_err(refused)?;
-    file.write_all(token.trim().as_bytes()).map_err(refused)?;
-    // A file made by someone else first keeps its own permissions; make sure they're 0600.
-    std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600)).map_err(refused)
+    private_file::write(TOKEN_FILE, token.trim())
 }
 
 pub fn forget_token() {
-    if let Some(path) = token_file() {
-        let _ = std::fs::remove_file(path);
-    }
+    private_file::remove(TOKEN_FILE);
     if std::env::var_os("AKYBA_USER_DATA").is_none() {
         let _ = security_framework::passwords::delete_generic_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT);
     }
-}
-
-fn agent() -> ureq::Agent {
-    let tls = ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).build();
-    ureq::Agent::config_builder()
-        .tls_config(tls)
-        .timeout_global(Some(Duration::from_secs(15)))
-        .http_status_as_error(false)
-        .build()
-        .new_agent()
 }
 
 /// `GET {API}{path}` with the token; ClickUp's error message on failure.
@@ -99,7 +73,7 @@ fn get(agent: &ureq::Agent, token: &str, path: &str) -> Result<String, String> {
 
 /// Who the token belongs to and their first workspace, to check a token when it is pasted.
 pub fn check(token: &str) -> Result<String, String> {
-    let agent = agent();
+    let agent = crate::http::agent();
     let workspaces = clickup::parse_workspaces(&get(&agent, token, "/team")?).map_err(|e| e.to_string())?;
     let (_, name) = workspaces.into_iter().next().ok_or("The token sees no ClickUp workspace.")?;
     Ok(name)
@@ -107,7 +81,7 @@ pub fn check(token: &str) -> Result<String, String> {
 
 /// The open tickets assigned to the token's owner, in every workspace it sees.
 pub fn my_tickets(token: &str) -> Result<Vec<Ticket>, String> {
-    let agent = agent();
+    let agent = crate::http::agent();
     let user = clickup::parse_user_id(&get(&agent, token, "/user")?).map_err(|e| e.to_string())?;
     let workspaces = clickup::parse_workspaces(&get(&agent, token, "/team")?).map_err(|e| e.to_string())?;
     let mut tickets = Vec::new();

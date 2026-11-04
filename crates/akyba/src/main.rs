@@ -16,6 +16,7 @@ mod files_view;
 mod gallery_view;
 mod github;
 mod history_view;
+mod http;
 mod impact_view;
 mod keymap;
 mod languages;
@@ -29,6 +30,7 @@ mod palette;
 mod pictures_view;
 mod pr_body_view;
 mod preview_view;
+mod private_file;
 mod problems_view;
 mod queue_view;
 mod references_view;
@@ -51,6 +53,7 @@ mod updates;
 mod usage;
 mod workspace;
 mod worktrees_view;
+mod youtrack;
 
 use std::borrow::Cow;
 

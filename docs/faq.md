@@ -13,8 +13,8 @@ sessions, limits. Any other program runs in its terminals too, without the signa
 
 **What leaves my Mac?** Akyba has no server and collects nothing. It asks GitHub for new
 versions and, through your own `gh`, for pull requests; Claude Code for your plan's usage (Codex's it
-reads from Codex's own files); and ClickUp only if you connect a token, which stays in a file only
-you can read.
+reads from Codex's own files); and ClickUp or YouTrack only if you connect them, with a token that
+stays in a file only you can read. YouTrack is asked only at the address you give it.
 
 **Why does macOS warn me the first time?** Akyba isn't notarised, because that needs a paid Apple
 Developer ID. It's built from this repo, and updates are signed, so an installed Akyba only accepts

@@ -19,7 +19,7 @@ pnpm health           # format check, clippy, tests, unused dependencies, licenc
 
 - **Conventional Commits**, checked by commitlint: `type(scope): subject`, the subject in lowercase,
   the header at most 100 characters, body lines too. The scope is the area you touched: `app`,
-  `editor`, `design`, `grid`, `impact`, `files`, `git`, `pty`, `clickup`.
+  `editor`, `design`, `grid`, `impact`, `files`, `git`, `pty`, `clickup`, `youtrack`.
 - One change per commit. A fix found on the way gets its own.
 - No secrets, tokens or personal paths in code, tests, docs or screenshots.
 
@@ -41,7 +41,7 @@ pnpm health           # format check, clippy, tests, unused dependencies, licenc
 - **Comments say why**, in plain sentences, on items and on anything surprising. Match the density
   and voice of the code around you. Names are words, not abbreviations.
 - **Stay generic.** Akyba is for anyone running agents: no company's workflow, ticket prefix or
-  commands built in. Examples use `acme-web`, `ABC-123` and `/start`. Integrations (ClickUp, `gh`)
+  commands built in. Examples use `acme-web`, `ABC-123` and `/start`. Integrations (ClickUp, YouTrack, `gh`)
   are optional and invisible when unused.
 - **Learn from other editors, don't copy them.** Zed and other GPL code can be read for ideas,
   never pasted. New dependencies must pass `cargo deny` (see `deny.toml`).

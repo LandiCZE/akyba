@@ -1,11 +1,11 @@
-//! The Tickets panel, on the window's right (⌘⌥B): the ClickUp tickets assigned to you, by status,
-//! searchable and filtered by status, priority, list, tag and due date. Clicking one starts an agent
-//! on it, as the ticket picker does; one that already has a pane says so. Without ClickUp it says
-//! how to connect it.
+//! The Tickets panel, on the window's right (⌘⌥B): the ClickUp and YouTrack tickets assigned to
+//! you, by status, searchable and filtered by status, priority, space or project, list, tag and due
+//! date. Clicking one starts an agent on it, as the ticket picker does; one that already has a pane
+//! says so. Without a tracker it says how to connect one.
 
 use std::collections::{BTreeSet, HashSet};
 
-use akyba_core::clickup::{self, Due, Filter, Ticket};
+use akyba_core::tickets::{self, Due, Filter, Source, Ticket};
 use akyba_design::{color, radius, space};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::{
@@ -98,13 +98,14 @@ impl TicketsView {
             all.extend(chosen.iter().cloned());
             all.into_iter().collect()
         };
-        let priorities: Vec<String> = clickup::PRIORITIES
-            .iter()
-            .map(|&priority| priority.to_owned())
-            .filter(|priority| {
-                filter.priorities.contains(priority) || tickets.iter().any(|t| t.priority.as_ref() == Some(priority))
-            })
-            .collect();
+        let priorities = tickets::priorities(tickets, &filter.priorities);
+        // ClickUp groups tickets in spaces, YouTrack in projects; the filter says which it shows.
+        let has_spaces = |source| tickets.iter().any(|ticket| ticket.source == source && ticket.space.is_some());
+        let space_title = match (has_spaces(Source::ClickUp), has_spaces(Source::YouTrack)) {
+            (true, true) => "Space or project",
+            (false, true) => "Project",
+            _ => "Space",
+        };
         let spaces = present(&mut tickets.iter().filter_map(|ticket| ticket.space.as_ref()), &filter.spaces);
         let lists = present(&mut tickets.iter().filter_map(|ticket| ticket.list.as_ref()), &filter.lists);
         let tags = present(&mut tickets.iter().flat_map(|ticket| ticket.tags.iter()), &filter.tags);
@@ -134,7 +135,7 @@ impl TicketsView {
                     let on = chosen.contains(&value);
                     let label = if kind == "priority" { capitalised(&value) } else { value.clone() };
                     self.chip(format!("filter-{kind}-{value}"), label, on, move |filter| {
-                        clickup::toggle(pick(filter), value.clone());
+                        tickets::toggle(pick(filter), value.clone());
                     })
                 })
                 .collect::<Vec<_>>()
@@ -147,7 +148,7 @@ impl TicketsView {
                     due.name().to_owned(),
                     filter.due.contains(&due),
                     move |filter| {
-                        clickup::toggle(&mut filter.due, due);
+                        tickets::toggle(&mut filter.due, due);
                     },
                 )
             })
@@ -167,7 +168,7 @@ impl TicketsView {
                 chips("priority", priorities, &filter.priorities, |filter| &mut filter.priorities),
             ))
             .children(group("Due", due))
-            .children(group("Space", chips("space", spaces, &filter.spaces, |filter| &mut filter.spaces)))
+            .children(group(space_title, chips("space", spaces, &filter.spaces, |filter| &mut filter.spaces)))
             .children(group("List", chips("list", lists, &filter.lists, |filter| &mut filter.lists)))
             .children(group("Tags", chips("tag", tags, &filter.tags, |filter| &mut filter.tags)))
             .when(count > 0, |filters| {
@@ -237,7 +238,10 @@ impl TicketsView {
                 chrome::icon_button(gpui_kit::SharedString::from(format!("open-{}", ticket.id)), "external-link", true)
                     .invisible()
                     .group_hover(group, gpui_kit::Styled::visible)
-                    .tooltip(chrome::tip("Open in ClickUp"))
+                    .tooltip(chrome::tip(match ticket.source {
+                        Source::ClickUp => "Open in ClickUp",
+                        Source::YouTrack => "Open in YouTrack",
+                    }))
                     .on_click(move |_, _, cx| {
                         cx.stop_propagation();
                         let _ = std::process::Command::new("open").arg(&url).spawn();
@@ -289,7 +293,7 @@ impl TicketsView {
 impl TicketsView {
     /// The tickets, under a heading for each status.
     fn render_list(tickets: &[Ticket], running: &HashSet<String>, cx: &mut Context<Self>) -> AnyElement {
-        let groups = clickup::by_status(tickets);
+        let groups = tickets::by_status(tickets);
         let mut list = div().id("tickets-list").flex_1().min_h_0().overflow_y_scroll().flex().flex_col();
         for (status, group) in groups {
             list = list.child(
@@ -323,19 +327,19 @@ fn capitalised(word: &str) -> String {
 impl Render for TicketsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(workspace) = self.workspace.upgrade() else { return div().into_any_element() };
-        let state = workspace.read(cx).clickup();
+        let state = workspace.read(cx).trackers();
         let query = self.search.read(cx).value().to_string();
         let filter = workspace.read(cx).settings().ticket_filter.clone();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |since| i64::try_from(since.as_millis()).unwrap_or(0));
-        let all = state.tickets.clone();
+        let all: Vec<Ticket> = state.tickets().cloned().collect();
         let tickets: Vec<Ticket> =
             all.iter().filter(|ticket| ticket.matches(&query) && filter.keeps(ticket, now)).cloned().collect();
         let running: HashSet<String> = workspace.read(cx).tickets_with_agents(cx);
         let note = if !state.connected() {
-            Some("Connect ClickUp in Settings to see the tickets assigned to you here.")
-        } else if state.loading {
+            Some("Connect ClickUp or YouTrack in Settings to see the tickets assigned to you here.")
+        } else if state.loading() && all.is_empty() {
             Some("Reading your tickets…")
         } else if tickets.is_empty() && all.is_empty() {
             Some("No open tickets assigned to you.")
@@ -344,7 +348,7 @@ impl Render for TicketsView {
         } else {
             None
         };
-        let problem = state.problem.clone();
+        let problem = state.problem();
         let connected = state.connected();
         let list = Self::render_list(&tickets, &running, cx);
         chrome::panel()

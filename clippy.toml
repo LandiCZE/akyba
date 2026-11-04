@@ -1,2 +1,2 @@
 # Product names that are written as names in docs, not as code.
-doc-valid-idents = ["AppKit", "ClickUp", "JetBrains", "JSDoc", ".."]
+doc-valid-idents = ["AppKit", "ClickUp", "JetBrains", "JSDoc", "YouTrack", ".."]

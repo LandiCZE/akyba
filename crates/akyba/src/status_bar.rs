@@ -185,7 +185,7 @@ impl StatusBar {
                 .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleEditor), cx))
                 .into_any_element(),
         ];
-        // Only with ClickUp connected: without it there's nothing to show.
+        // Only with a tracker connected: without one there's nothing to show.
         if let Some(tickets) = tickets {
             toggles.push(
                 toggle("toggle-tickets", "panel-right", tickets)

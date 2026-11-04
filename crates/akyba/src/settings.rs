@@ -41,7 +41,7 @@ pub struct Settings {
     /// The Claude plan's limits at the foot of the sidebar.
     pub show_usage: bool,
     /// Which tickets the Tickets panel shows.
-    pub ticket_filter: akyba_core::clickup::Filter,
+    pub ticket_filter: akyba_core::tickets::Filter,
     /// A worktree's env files are links to the main checkout's, so every worktree has the same
     /// values (`akyba_core::shared_env`).
     pub share_env_files: bool,
@@ -93,7 +93,7 @@ pub struct Panels {
     pub sidebar: bool,
     /// The editor, above the grid (⌘J).
     pub editor: bool,
-    /// The ClickUp tickets, on the right (⌘⌥B).
+    /// The tickets, on the right (⌘⌥B).
     pub tickets: bool,
 }
 
@@ -154,7 +154,7 @@ impl Default for TerminalSettings {
 /// Wide enough for what most programs expect of a terminal.
 pub const NARROWEST_PANE: u16 = 80;
 
-/// How a project starts an agent on a ClickUp ticket. Kept in Akyba's settings, never in the
+/// How a project starts an agent on a ticket. Kept in Akyba's settings, never in the
 /// project's repository.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -252,7 +252,7 @@ impl Default for Settings {
             editor: EditorSettings::default(),
             terminal: TerminalSettings::default(),
             show_usage: true,
-            ticket_filter: akyba_core::clickup::Filter::default(),
+            ticket_filter: akyba_core::tickets::Filter::default(),
             share_env_files: true,
             panels: Panels::default(),
             agent: None,

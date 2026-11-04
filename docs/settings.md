@@ -25,7 +25,9 @@ panels (sidebar, editor, tickets) were showing, so Akyba opens with the same one
   would. Tickets mentioned in normal prompts never rename anything.
 - **Keyboard shortcuts**: click one and press the keys you want; a shortcut that had them gives them
   up.
-- **ClickUp** (optional): your API token, kept in a file only you can read, plus, for each project, the
-  commands a ticket starts, one for each agent (`claude -n {ticket}` and `codex` by default;
+- **Tickets** (optional): ClickUp, with your API token, and YouTrack, with its address (YouTrack
+  Cloud or a server of your own, such as `https://youtrack.acme.dev`) and a permanent token; each
+  kept in a file only you can read. With either connected, for each project, the commands a ticket
+  starts, one for each agent (`claude -n {ticket}` and `codex` by default;
   `claude -n {ticket} "/start {ticket}"` sends the agent a first message, so it starts working at
   once) and whether it gets its own worktree.

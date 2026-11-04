@@ -1,47 +1,9 @@
-//! ClickUp's tickets as Akyba needs them: an id to start an agent on, a title, and a status to
-//! show on the pane. Parsed from ClickUp's API v2 (<https://developer.clickup.com>); the HTTP calls
-//! live in the app.
+//! ClickUp's tasks as Akyba's tickets, parsed from ClickUp's API v2
+//! (<https://developer.clickup.com>); the HTTP calls live in the app.
 
-use std::collections::BTreeSet;
+use serde::Deserialize;
 
-use serde::{Deserialize, Serialize};
-
-/// One task, as the picker and the pane header show it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Ticket {
-    /// ClickUp's own id (`86c1abc2`), for API calls and links.
-    pub id: String,
-    /// The workspace's custom id (`ABC-236`) when it uses them; what people call the ticket.
-    pub custom_id: Option<String>,
-    pub title: String,
-    pub status: String,
-    /// The status's colour in ClickUp, `#rrggbb`.
-    pub status_color: Option<String>,
-    pub url: String,
-    pub list: Option<String>,
-    /// The space it's in: its id from the task, its name once the space list is read.
-    pub space_id: Option<String>,
-    pub space: Option<String>,
-    /// `urgent`, `high`, `normal` or `low`, when it has one.
-    pub priority: Option<String>,
-    pub tags: Vec<String>,
-    /// When it's due, in milliseconds since 1970.
-    pub due: Option<i64>,
-}
-
-impl Ticket {
-    /// What the ticket is called: its custom id, else ClickUp's id.
-    pub fn key(&self) -> &str {
-        self.custom_id.as_deref().unwrap_or(&self.id)
-    }
-
-    /// Whether a search matches its key, title or status, ignoring case.
-    pub fn matches(&self, query: &str) -> bool {
-        let query = query.trim().to_lowercase();
-        query.is_empty()
-            || [self.key(), &self.title, &self.status].iter().any(|text| text.to_lowercase().contains(&query))
-    }
-}
+use crate::tickets::{Source, Ticket, hex_color};
 
 #[derive(Deserialize)]
 struct TaskJson {
@@ -88,17 +50,22 @@ struct NamedJson {
 
 impl From<TaskJson> for Ticket {
     fn from(task: TaskJson) -> Self {
+        let priority = task.priority.map(|priority| priority.priority);
         Self {
+            source: Source::ClickUp,
             id: task.id,
             custom_id: task.custom_id.filter(|id| !id.is_empty()),
             title: task.name,
             status: task.status.status,
-            status_color: task.status.color.filter(|color| color.starts_with('#')),
+            status_color: task.status.color.as_deref().and_then(hex_color),
             url: task.url,
             list: task.list.map(|list| list.name),
             space_id: task.space.map(|space| space.id),
             space: None,
-            priority: task.priority.map(|priority| priority.priority),
+            priority_rank: priority.as_deref().and_then(|priority| {
+                PRIORITIES.iter().position(|known| *known == priority).and_then(|rank| u32::try_from(rank).ok())
+            }),
+            priority,
             tags: task.tags.into_iter().map(|tag| tag.name).collect(),
             due: task.due_date.and_then(|due| due.parse().ok()),
         }
@@ -157,82 +124,6 @@ pub fn parse_workspaces(json: &str) -> Result<Vec<(String, String)>, serde_json:
 /// ClickUp's priorities, most pressing first.
 pub const PRIORITIES: [&str; 4] = ["urgent", "high", "normal", "low"];
 
-/// When a ticket is due, as the filter offers it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Due {
-    Overdue,
-    NextWeek,
-    NoDate,
-}
-
-impl Due {
-    pub const ALL: [Self; 3] = [Self::Overdue, Self::NextWeek, Self::NoDate];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Overdue => "Overdue",
-            Self::NextWeek => "Next 7 days",
-            Self::NoDate => "No due date",
-        }
-    }
-
-    /// Where a ticket falls, at `now` (milliseconds); `None` when due later than a week out.
-    pub fn of(ticket: &Ticket, now: i64) -> Option<Self> {
-        const WEEK: i64 = 7 * 24 * 60 * 60 * 1000;
-        match ticket.due {
-            None => Some(Self::NoDate),
-            Some(due) if due < now => Some(Self::Overdue),
-            Some(due) if due < now + WEEK => Some(Self::NextWeek),
-            Some(_) => None,
-        }
-    }
-}
-
-/// Which tickets the Tickets panel shows. Within a kind any chosen value matches (to do or
-/// review); across kinds all must (to do, and urgent). An empty kind lets everything through.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Filter {
-    pub statuses: BTreeSet<String>,
-    pub priorities: BTreeSet<String>,
-    pub spaces: BTreeSet<String>,
-    pub lists: BTreeSet<String>,
-    pub tags: BTreeSet<String>,
-    pub due: BTreeSet<Due>,
-}
-
-impl Filter {
-    /// How many values are chosen, for the filter button's badge.
-    pub fn count(&self) -> usize {
-        self.statuses.len()
-            + self.priorities.len()
-            + self.spaces.len()
-            + self.lists.len()
-            + self.tags.len()
-            + self.due.len()
-    }
-
-    pub fn keeps(&self, ticket: &Ticket, now: i64) -> bool {
-        let one_of = |chosen: &BTreeSet<String>, value: Option<&String>| {
-            chosen.is_empty() || value.is_some_and(|value| chosen.contains(value))
-        };
-        one_of(&self.statuses, Some(&ticket.status))
-            && one_of(&self.priorities, ticket.priority.as_ref())
-            && one_of(&self.spaces, ticket.space.as_ref())
-            && one_of(&self.lists, ticket.list.as_ref())
-            && (self.tags.is_empty() || ticket.tags.iter().any(|tag| self.tags.contains(tag)))
-            && (self.due.is_empty() || Due::of(ticket, now).is_some_and(|due| self.due.contains(&due)))
-    }
-}
-
-/// Adds `value` to `set`, or takes it out if it's there.
-pub fn toggle<T: Ord>(set: &mut BTreeSet<T>, value: T) {
-    if !set.remove(&value) {
-        set.insert(value);
-    }
-}
-
 /// A workspace's spaces, from `GET /team/{team_id}/space`, as (id, name).
 pub fn parse_spaces(json: &str) -> Result<Vec<(String, String)>, serde_json::Error> {
     #[derive(Deserialize)]
@@ -245,18 +136,6 @@ pub fn parse_spaces(json: &str) -> Result<Vec<(String, String)>, serde_json::Err
         name: String,
     }
     serde_json::from_str::<Body>(json).map(|body| body.spaces.into_iter().map(|space| (space.id, space.name)).collect())
-}
-
-/// Groups tickets by status for the picker, keeping ClickUp's order of first appearance.
-pub fn by_status(tickets: &[Ticket]) -> Vec<(&str, Vec<&Ticket>)> {
-    let mut groups: Vec<(&str, Vec<&Ticket>)> = Vec::new();
-    for ticket in tickets {
-        match groups.iter_mut().find(|(status, _)| *status == ticket.status) {
-            Some((_, group)) => group.push(ticket),
-            None => groups.push((&ticket.status, vec![ticket])),
-        }
-    }
-    groups
 }
 
 #[cfg(test)]
@@ -287,15 +166,6 @@ mod tests {
     }
 
     #[test]
-    fn search_looks_at_the_key_the_title_and_the_status() {
-        let (tickets, _) = parse_task_page(PAGE).expect("parses");
-        assert!(tickets[0].matches("abc-236"));
-        assert!(tickets[0].matches("dark mode"));
-        assert!(tickets[1].matches("READY"));
-        assert!(!tickets[1].matches("dark mode"));
-    }
-
-    #[test]
     fn reads_priority_tags_and_due_date_and_filters_by_them() {
         let json = r##"{"id": "1", "name": "Pay out refunds", "status": {"status": "to do"}, "url": "u",
             "list": {"name": "Web"}, "priority": {"priority": "urgent", "color": "#f50000"},
@@ -305,24 +175,7 @@ mod tests {
             (ticket.priority.as_deref(), ticket.tags.as_slice(), ticket.due),
             (Some("urgent"), &["billing".to_owned()][..], Some(1000))
         );
-        let mut filter = Filter::default();
-        assert!(filter.keeps(&ticket, 0));
-        toggle(&mut filter.statuses, "to do".to_owned());
-        toggle(&mut filter.statuses, "review".to_owned());
-        assert!(filter.keeps(&ticket, 0), "any chosen status matches");
-        toggle(&mut filter.priorities, "low".to_owned());
-        assert!(!filter.keeps(&ticket, 0), "every kind must match");
-        toggle(&mut filter.priorities, "low".to_owned());
-        filter.due.insert(Due::Overdue);
-        assert!(filter.keeps(&ticket, 5000) && !filter.keeps(&ticket, 0));
-        assert_eq!(filter.count(), 3);
-    }
-
-    #[test]
-    fn tickets_group_by_status_in_order() {
-        let (tickets, _) = parse_task_page(PAGE).expect("parses");
-        let groups = by_status(&tickets);
-        assert_eq!(groups.iter().map(|(status, _)| *status).collect::<Vec<_>>(), ["building", "ready"]);
+        assert_eq!(ticket.priority_rank, Some(0), "urgent is ClickUp's most pressing");
     }
 
     #[test]

@@ -30,12 +30,12 @@ enum Section {
     Terminal,
     Agents,
     Keymap,
-    ClickUp,
+    Tickets,
 }
 
 impl Section {
     const ALL: [Self; 7] =
-        [Self::General, Self::Appearance, Self::Editor, Self::Terminal, Self::Agents, Self::Keymap, Self::ClickUp];
+        [Self::General, Self::Appearance, Self::Editor, Self::Terminal, Self::Agents, Self::Keymap, Self::Tickets];
 
     fn name(self) -> &'static str {
         match self {
@@ -45,7 +45,7 @@ impl Section {
             Self::Terminal => "Terminal",
             Self::Agents => "Agents",
             Self::Keymap => "Keyboard shortcuts",
-            Self::ClickUp => "ClickUp",
+            Self::Tickets => "Tickets",
         }
     }
 
@@ -57,7 +57,7 @@ impl Section {
             Self::Terminal => "square-terminal",
             Self::Agents => "bot",
             Self::Keymap => "keyboard",
-            Self::ClickUp => "link-2",
+            Self::Tickets => "link-2",
         }
     }
 }
@@ -122,6 +122,9 @@ pub struct SettingsView {
     section: Section,
     search: Entity<InputState>,
     token: Entity<InputState>,
+    /// Your YouTrack's address and a permanent token for it, until it's connected.
+    youtrack_address: Entity<InputState>,
+    youtrack_token: Entity<InputState>,
     command: Entity<InputState>,
     codex_command: Entity<InputState>,
     /// What starts Claude Code and Codex (Settings → Agents).
@@ -151,6 +154,8 @@ impl SettingsView {
         let (ticket_command, codex_command) = commands;
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search settings"));
         let token = cx.new(|cx| InputState::new(window, cx).masked(true).placeholder("pk_…"));
+        let youtrack_address = cx.new(|cx| InputState::new(window, cx).placeholder("https://youtrack.acme.dev"));
+        let youtrack_token = cx.new(|cx| InputState::new(window, cx).masked(true).placeholder("perm:…"));
         let command = cx.new(|cx| InputState::new(window, cx).default_value(ticket_command));
         let codex_command = cx.new(|cx| InputState::new(window, cx).default_value(codex_command));
         let default = AgentCommands::default();
@@ -221,6 +226,8 @@ impl SettingsView {
             section,
             search,
             token,
+            youtrack_address,
+            youtrack_token,
             command,
             codex_command,
             start_claude,
@@ -680,15 +687,22 @@ impl SettingsView {
         cx.notify();
     }
 
-    fn clickup(&self, cx: &mut Context<Self>) -> Vec<Row> {
+    /// Tickets: ClickUp and YouTrack, each connected or not, then how a ticket starts an agent in
+    /// this project, once either is.
+    fn tickets(&self, cx: &mut Context<Self>) -> Vec<Row> {
         let Some(workspace) = self.workspace.upgrade() else { return Vec::new() };
-        let workspace_view = workspace.read(cx);
-        let state = workspace_view.clickup();
-        let project = workspace_view.project_path().to_owned();
-        let create_worktree = workspace_view.settings().project(&project).create_worktree;
-        let project_name = project
-            .file_name()
-            .map_or_else(|| project.display().to_string(), |name| name.to_string_lossy().into_owned());
+        let mut rows =
+            vec![self.clickup(&workspace, cx).under("ClickUp"), self.youtrack(&workspace, cx).under("YouTrack")];
+        if workspace.read(cx).trackers().connected() {
+            rows.extend(
+                self.starting_work(&workspace, cx).into_iter().map(|row| row.under("Starting work on a ticket")),
+            );
+        }
+        rows
+    }
+
+    fn clickup(&self, workspace: &Entity<Workspace>, cx: &mut Context<Self>) -> Row {
+        let state = &workspace.read(cx).trackers().clickup;
         let status = state
             .problem
             .clone()
@@ -704,22 +718,20 @@ impl SettingsView {
                     }
                 })
             };
-            return vec![
-                Row::new(
-                    Section::ClickUp,
-                    "Connect ClickUp",
-                    format!(
-                        "Start agents from your tickets and see them in the Tickets panel. Paste a personal API token (ClickUp → Settings → Apps); Akyba keeps it in a file only you can read. {status}"
-                    ),
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(len(space::SPACE_2))
-                        .child(div().flex_1().child(crate::chrome::input(&self.token)))
-                        .child(connect),
-                )
-                .wide(),
-            ];
+            return Row::new(
+                Section::Tickets,
+                "Connect ClickUp",
+                format!(
+                    "Start agents from your tickets and see them in the Tickets panel. Paste a personal API token (ClickUp → Settings → Apps); Akyba keeps it in a file only you can read. {status}"
+                ),
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(len(space::SPACE_2))
+                    .child(div().flex_1().child(crate::chrome::input(&self.token)))
+                    .child(connect),
+            )
+            .wide();
         }
         let account =
             state.account.clone().map_or_else(|| "Connected.".to_owned(), |name| format!("Connected to {name}."));
@@ -729,6 +741,79 @@ impl SettingsView {
                 let _ = workspace.update(cx, Workspace::disconnect_clickup);
             })
         };
+        Row::new(
+            Section::Tickets,
+            "ClickUp",
+            format!("{account} ⌘⇧N starts an agent on one of your tickets. {status}"),
+            disconnect,
+        )
+    }
+
+    fn youtrack(&self, workspace: &Entity<Workspace>, cx: &mut Context<Self>) -> Row {
+        let state = &workspace.read(cx).trackers().youtrack;
+        let status = state
+            .problem
+            .clone()
+            .or_else(|| state.loading.then(|| "Checking with YouTrack…".to_owned()))
+            .unwrap_or_default();
+        if !state.connected() {
+            let connect = {
+                let (workspace, address, token) =
+                    (self.workspace.clone(), self.youtrack_address.clone(), self.youtrack_token.clone());
+                chrome::button("youtrack-connect", "Connect", None, true).on_click(move |_, _, cx| {
+                    let address = address.read(cx).value().to_string();
+                    let token = token.read(cx).value().trim().to_owned();
+                    if !token.is_empty() {
+                        let _ = workspace.update(cx, |workspace, cx| workspace.connect_youtrack(&address, token, cx));
+                    }
+                })
+            };
+            return Row::new(
+                Section::Tickets,
+                "Connect YouTrack",
+                format!(
+                    "Start agents from the issues assigned to you and see them in the Tickets panel. Type your YouTrack's address, YouTrack Cloud or a server of your own, and paste a permanent token (your profile → Account Security → New token, with YouTrack in its scope); Akyba keeps both in a file only you can read. {status}"
+                ),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(len(space::SPACE_2))
+                    .child(crate::chrome::input(&self.youtrack_address))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(len(space::SPACE_2))
+                            .child(div().flex_1().child(crate::chrome::input(&self.youtrack_token)))
+                            .child(connect),
+                    ),
+            )
+            .wide();
+        }
+        let account =
+            state.account.clone().map_or_else(|| "Connected.".to_owned(), |name| format!("Connected as {name}."));
+        let disconnect = {
+            let workspace = self.workspace.clone();
+            chrome::button("youtrack-disconnect", "Disconnect", None, false).on_click(move |_, _, cx| {
+                let _ = workspace.update(cx, Workspace::disconnect_youtrack);
+            })
+        };
+        Row::new(
+            Section::Tickets,
+            "YouTrack",
+            format!("{account} ⌘⇧N starts an agent on one of your open issues. {status}"),
+            disconnect,
+        )
+    }
+
+    /// How a ticket starts an agent in this project, whichever tracker it comes from.
+    fn starting_work(&self, workspace: &Entity<Workspace>, cx: &mut Context<Self>) -> Vec<Row> {
+        let workspace_view = workspace.read(cx);
+        let project = workspace_view.project_path().to_owned();
+        let create_worktree = workspace_view.settings().project(&project).create_worktree;
+        let project_name = project
+            .file_name()
+            .map_or_else(|| project.display().to_string(), |name| name.to_string_lossy().into_owned());
         let worktree = {
             let workspace = self.workspace.clone();
             chrome::switch("ticket-worktree", create_worktree, move |on: &bool, _, cx| {
@@ -743,27 +828,21 @@ impl SettingsView {
         };
         vec![
             Row::new(
-                Section::ClickUp,
-                "ClickUp",
-                format!("{account} ⌘⇧N starts an agent on one of your tickets. {status}"),
-                disconnect,
-            ),
-            Row::new(
-                Section::ClickUp,
+                Section::Tickets,
                 format!("Starting Claude Code on a ticket in {project_name}"),
                 "Runs in the new pane. {ticket} becomes the ticket's id (ABC-236), {title} its title. To have the agent start straight away, give it a first message: claude -n {ticket} \"/start {ticket}\".",
                 crate::chrome::input(&self.command),
             )
             .wide(),
             Row::new(
-                Section::ClickUp,
+                Section::Tickets,
                 format!("Starting Codex on a ticket in {project_name}"),
                 "The same for Codex, which has no flag to name its session: codex \"Work on {ticket}: {title}\".",
                 crate::chrome::input(&self.codex_command),
             )
             .wide(),
             Row::new(
-                Section::ClickUp,
+                Section::Tickets,
                 "A worktree per ticket",
                 "Akyba makes a git worktree next to the project, on a branch named after the ticket, and opens the pane there. Off when the command sets up its own.",
                 worktree,
@@ -785,7 +864,7 @@ impl SettingsView {
         rows.push(Self::found(Agent::Codex, cx));
         rows.extend(self.codex(&settings, cx).into_iter().map(|row| row.under(Agent::Codex.name())));
         rows.extend(SHORTCUTS.iter().map(|shortcut| self.shortcut_row(shortcut, &settings, cx)));
-        rows.extend(self.clickup(cx));
+        rows.extend(self.tickets(cx));
         rows
     }
 

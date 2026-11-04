@@ -10,7 +10,6 @@ use akyba_core::agent_state::{AgentState, tab_title};
 use akyba_core::agents::Agent;
 use akyba_core::best_of;
 use akyba_core::checks;
-use akyba_core::clickup::Ticket;
 use akyba_core::git;
 use akyba_core::grid_scroll::{self, Side, Span};
 use akyba_core::layout::{Cell, CellId, Direction, Layout, RowId, TabId};
@@ -26,6 +25,7 @@ use akyba_core::session_usage::{self, Tokens};
 use akyba_core::shared_env;
 use akyba_core::snapshot::{self, Snapshot};
 use akyba_core::teams::{self, Team};
+use akyba_core::tickets::Ticket;
 use akyba_core::waiting::{self, Waiting};
 use akyba_core::worktree_include;
 use akyba_core::worktrees::Worktree;
@@ -54,6 +54,7 @@ use crate::status_bar::StatusBar;
 use crate::theme::TypeScale as _;
 use crate::theme::{self, len};
 use crate::tickets_view::TicketsView;
+use crate::youtrack;
 use crate::{dock, github, menu_bar, notify, palette, settings_view, ticket_picker};
 use akyba_design::icon;
 use akyba_design::text;
@@ -345,7 +346,7 @@ pub struct Workspace {
     editors: HashMap<PathBuf, Entity<EditorView>>,
     /// Along the window's foot: problems, the language server, the cursor, the branch.
     status_bar: Entity<StatusBar>,
-    /// Your ClickUp tickets, on the right (made the first time it opens).
+    /// Your tickets, on the right (made the first time it opens).
     tickets_view: Option<Entity<TicketsView>>,
     /// What the sidebar shows.
     sidebar_tab: SidebarTab,
@@ -370,8 +371,8 @@ pub struct Workspace {
     /// For each pane in a worktree, the same work's worktrees in the window's other repos: their
     /// folders and their repos' names.
     links: HashMap<TabId, Vec<(PathBuf, String)>>,
-    /// ClickUp, when a token is set; nothing about it shows otherwise.
-    clickup: ClickUpState,
+    /// ClickUp and YouTrack, each when connected; nothing about either shows otherwise.
+    trackers: Trackers,
     /// Where a dragged tab would land: a cell, and the side to split it on (`None`: into the cell).
     drop_target: Option<(CellId, Option<Direction>)>,
     /// The repository and branch each tab is in, read in the background.
@@ -633,24 +634,63 @@ fn read_checkouts(
     (checkouts, pull_requests, notes)
 }
 
-/// The ClickUp connection as the window knows it.
-#[derive(Default)]
-pub struct ClickUpState {
-    token: Option<String>,
-    /// The workspace the token reaches, once checked.
+/// One tracker's connection as the window knows it; `L` is what it signs in with.
+pub struct Tracker<L> {
+    login: Option<L>,
+    /// Whom or what the login reaches, once checked ("Acme", "Jane Doe at youtrack.acme.dev").
     pub account: Option<String>,
-    /// The last thing that went wrong, shown in Settings and the ticket picker.
+    /// The last thing that went wrong, shown in Settings, the Tickets panel and the ticket picker.
     pub problem: Option<String>,
-    /// Open tickets assigned to the token's owner, refreshed every minute.
+    /// Open tickets assigned to the login's owner, refreshed every minute.
     pub tickets: Vec<Ticket>,
     pub loading: bool,
-    /// The demo's tickets: made up, so never refreshed from ClickUp.
+}
+
+impl<L> Default for Tracker<L> {
+    fn default() -> Self {
+        Self { login: None, account: None, problem: None, tickets: Vec::new(), loading: false }
+    }
+}
+
+impl<L> Tracker<L> {
+    pub fn connected(&self) -> bool {
+        self.login.is_some()
+    }
+}
+
+/// The trackers tickets come from: ClickUp with its API token, YouTrack with its address and a
+/// permanent token. Either, both or neither may be connected.
+#[derive(Default)]
+pub struct Trackers {
+    pub clickup: Tracker<String>,
+    pub youtrack: Tracker<youtrack::Login>,
+    /// The demo's tickets: made up, so never refreshed from a tracker.
     made_up: bool,
 }
 
-impl ClickUpState {
+impl Trackers {
+    /// Whether any tracker is connected: without one, nothing about tickets shows.
     pub fn connected(&self) -> bool {
-        self.token.is_some()
+        self.clickup.connected() || self.youtrack.connected()
+    }
+
+    /// Whether a connected tracker is reading its tickets for the first time.
+    pub fn loading(&self) -> bool {
+        self.clickup.loading || self.youtrack.loading
+    }
+
+    /// Every connected tracker's tickets, ClickUp's first.
+    pub fn tickets(&self) -> impl Iterator<Item = &Ticket> {
+        self.clickup.tickets.iter().chain(&self.youtrack.tickets)
+    }
+
+    /// What went wrong with the connected trackers, each problem saying which tracker it's about.
+    pub fn problem(&self) -> Option<String> {
+        let problems: Vec<&str> = [&self.clickup.problem, &self.youtrack.problem]
+            .into_iter()
+            .filter_map(|problem| problem.as_deref())
+            .collect();
+        (!problems.is_empty()).then(|| problems.join(" "))
     }
 }
 
@@ -709,7 +749,7 @@ fn start_bridge() -> Option<(Bridge, async_channel::Receiver<HookCall>)> {
     }
 }
 
-/// A pane's ticket: its status in ClickUp's own colour, opening the ticket.
+/// A pane's ticket: its status in its tracker's own colour, opening the ticket.
 fn ticket_chip(cell: CellId, ticket: &Ticket) -> impl IntoElement {
     let url = ticket.url.clone();
     div()
@@ -1065,16 +1105,18 @@ fn process_name(pid: i32) -> Option<String> {
 }
 
 impl Workspace {
-    /// What changes outside Akyba without telling it, read again on timers: ClickUp's tickets,
+    /// What changes outside Akyba without telling it, read again on timers: the trackers' tickets,
     /// branches and pull requests, and the servers panes run.
     fn keep_fresh(window: &mut Window, cx: &mut Context<Self>) {
-        // A saved ClickUp token turns the ticket picker on; it's read off the main thread.
+        // A saved ClickUp token or YouTrack login turns the ticket picker on; they're read off the
+        // main thread.
         cx.spawn_in(window, async move |this, cx| {
-            let token = cx.background_spawn(async { clickup::token() }).await;
-            if let Some(token) = token {
+            let (token, login) = cx.background_spawn(async { (clickup::token(), youtrack::login()) }).await;
+            if token.is_some() || login.is_some() {
                 let _ = this.update_in(cx, |this, window, cx| {
-                    this.clickup.token = Some(token);
-                    // The Tickets panel waits for ClickUp before it reopens: without it, it's empty.
+                    this.trackers.clickup.login = token;
+                    this.trackers.youtrack.login = login;
+                    // The Tickets panel waits for a tracker before it reopens: without one, it's empty.
                     if this.settings.panels.tickets {
                         this.open_tickets(window, cx);
                     } else {
@@ -1082,7 +1124,7 @@ impl Workspace {
                     }
                 });
             }
-            // Statuses change in ClickUp; a minute is fresh enough and far under its rate limit.
+            // Statuses change in the trackers; a minute is fresh enough and far under their rate limits.
             loop {
                 cx.background_executor().timer(std::time::Duration::from_secs(60)).await;
                 if this.update(cx, Workspace::refresh_tickets).is_err() {
@@ -1183,7 +1225,7 @@ impl Workspace {
             teams: HashMap::new(),
             also_in: Vec::new(),
             links: HashMap::new(),
-            clickup: ClickUpState::default(),
+            trackers: Trackers::default(),
             checkouts: HashMap::new(),
             drop_target: None,
             pull_requests: HashMap::new(),
@@ -1525,14 +1567,14 @@ impl Workspace {
         self.after_layout_change(window, cx);
     }
 
-    pub fn clickup(&self) -> &ClickUpState {
-        &self.clickup
+    pub fn trackers(&self) -> &Trackers {
+        &self.trackers
     }
 
     /// Checks `token` with ClickUp and, if it works, saves it.
     pub fn connect_clickup(&mut self, token: String, cx: &mut Context<Self>) {
-        self.clickup.problem = None;
-        self.clickup.loading = true;
+        self.trackers.clickup.problem = None;
+        self.trackers.clickup.loading = true;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let checked = cx
@@ -1542,14 +1584,15 @@ impl Workspace {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                this.clickup.loading = false;
+                let clickup = &mut this.trackers.clickup;
+                clickup.loading = false;
                 match checked {
                     Ok(account) => {
-                        this.clickup.token = Some(token);
-                        this.clickup.account = Some(account);
+                        clickup.login = Some(token);
+                        clickup.account = Some(account);
                         this.refresh_tickets(cx);
                     }
-                    Err(problem) => this.clickup.problem = Some(problem),
+                    Err(problem) => clickup.problem = Some(problem),
                 }
                 cx.notify();
             });
@@ -1559,32 +1602,98 @@ impl Workspace {
 
     pub fn disconnect_clickup(&mut self, cx: &mut Context<Self>) {
         clickup::forget_token();
-        self.clickup = ClickUpState::default();
+        self.trackers.clickup = Tracker::default();
         cx.notify();
     }
 
-    /// Reads the open tickets again, off the main thread.
-    pub fn refresh_tickets(&mut self, cx: &mut Context<Self>) {
-        if self.clickup.made_up {
-            return;
-        }
-        let Some(token) = self.clickup.token.clone() else { return };
-        self.clickup.loading = self.clickup.tickets.is_empty();
+    /// Checks the YouTrack at `address` (as typed) with `token` and, if it answers, saves both.
+    pub fn connect_youtrack(&mut self, address: &str, token: String, cx: &mut Context<Self>) {
+        let url = match akyba_core::youtrack::instance_url(address) {
+            Ok(url) => url,
+            Err(problem) => {
+                self.trackers.youtrack.problem = Some(problem);
+                cx.notify();
+                return;
+            }
+        };
+        self.trackers.youtrack.problem = None;
+        self.trackers.youtrack.loading = true;
+        cx.notify();
+        let login = youtrack::Login { url, token };
         cx.spawn(async move |this, cx| {
-            let tickets = cx.background_spawn(async move { clickup::my_tickets(&token) }).await;
+            let checked = cx
+                .background_spawn({
+                    let login = login.clone();
+                    async move { youtrack::check(&login).and_then(|account| youtrack::save_login(&login).map(|()| account)) }
+                })
+                .await;
             let _ = this.update(cx, |this, cx| {
-                this.clickup.loading = false;
-                match tickets {
-                    Ok(tickets) => {
-                        this.clickup.tickets = tickets;
-                        this.clickup.problem = None;
+                let youtrack = &mut this.trackers.youtrack;
+                youtrack.loading = false;
+                match checked {
+                    Ok(account) => {
+                        youtrack.login = Some(login);
+                        youtrack.account = Some(account);
+                        this.refresh_tickets(cx);
                     }
-                    Err(problem) => this.clickup.problem = Some(problem),
+                    Err(problem) => youtrack.problem = Some(problem),
                 }
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    pub fn disconnect_youtrack(&mut self, cx: &mut Context<Self>) {
+        youtrack::forget_login();
+        self.trackers.youtrack = Tracker::default();
+        cx.notify();
+    }
+
+    /// Reads every connected tracker's open tickets again, off the main thread, each on its own:
+    /// one that's slow or failing doesn't hold back the other.
+    pub fn refresh_tickets(&mut self, cx: &mut Context<Self>) {
+        if self.trackers.made_up {
+            return;
+        }
+        if let Some(token) = self.trackers.clickup.login.clone() {
+            self.trackers.clickup.loading = self.trackers.clickup.tickets.is_empty();
+            cx.spawn(async move |this, cx| {
+                let tickets = cx.background_spawn(async move { clickup::my_tickets(&token) }).await;
+                let _ = this.update(cx, |this, cx| {
+                    Self::read_tickets(&mut this.trackers.clickup, tickets);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        if let Some(login) = self.trackers.youtrack.login.clone() {
+            self.trackers.youtrack.loading = self.trackers.youtrack.tickets.is_empty();
+            cx.spawn(async move |this, cx| {
+                let tickets = cx.background_spawn(async move { youtrack::my_tickets(&login) }).await;
+                let _ = this.update(cx, |this, cx| {
+                    Self::read_tickets(&mut this.trackers.youtrack, tickets);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+    }
+
+    /// A tracker's answer: its tickets, or what went wrong. A tracker disconnected while it was
+    /// asked keeps nothing.
+    fn read_tickets<L>(tracker: &mut Tracker<L>, tickets: Result<Vec<Ticket>, String>) {
+        tracker.loading = false;
+        if !tracker.connected() {
+            return;
+        }
+        match tickets {
+            Ok(tickets) => {
+                tracker.tickets = tickets;
+                tracker.problem = None;
+            }
+            Err(problem) => tracker.problem = Some(problem),
+        }
     }
 
     /// Starts an agent (or, with `None`, only a shell) on `ticket` in a new pane: in its own
@@ -2687,16 +2796,15 @@ impl Workspace {
     /// The ticket a tab works on: a ticket whose key is the tab's name, its Claude session's name
     /// or its branch.
     pub fn ticket_of(&self, tab: TabId, cx: &gpui_kit::App) -> Option<&Ticket> {
-        if self.clickup.tickets.is_empty() {
-            return None;
-        }
+        // Without a ticket there's nothing to find, and no reason to read the tab's names.
+        self.trackers.tickets().next()?;
         let view = self.terminals.get(&tab)?.read(cx);
         let mut names: Vec<String> = Vec::new();
         names.extend(self.names.get(&tab).cloned());
         names.extend(self.session_names.get(&tab).cloned());
         names.extend(view.title.clone());
         names.extend(self.checkouts.get(&tab).map(|checkout| checkout.branch.clone()));
-        self.clickup.tickets.iter().find(|ticket| {
+        self.trackers.tickets().find(|ticket| {
             let key = ticket.key().to_lowercase();
             names.iter().any(|name| {
                 let name = name.to_lowercase();
@@ -2795,6 +2903,7 @@ impl Workspace {
                 let (list, priority, tag, due) = more;
                 let space = if list == "API" { "Platform" } else { "Shop" };
                 Ticket {
+                    source: akyba_core::tickets::Source::ClickUp,
                     id: id.to_owned(),
                     custom_id: Some(key.to_owned()),
                     title: title.to_owned(),
@@ -2805,13 +2914,17 @@ impl Workspace {
                     space_id: None,
                     space: Some(space.to_owned()),
                     priority: Some(priority.to_owned()),
+                    priority_rank: akyba_core::clickup::PRIORITIES
+                        .iter()
+                        .position(|known| *known == priority)
+                        .and_then(|rank| u32::try_from(rank).ok()),
                     tags: vec![tag.to_owned()],
                     due: due.map(|days| now + days * day),
                 }
             };
-        self.clickup.token = Some("demo".to_owned());
-        self.clickup.made_up = true;
-        self.clickup.tickets = vec![
+        self.trackers.clickup.login = Some("demo".to_owned());
+        self.trackers.made_up = true;
+        self.trackers.clickup.tickets = vec![
             ticket(
                 "a1",
                 "ABC-240",
@@ -4411,11 +4524,11 @@ impl Workspace {
     }
 
     /// Which panels are on screen (none while a pane is maximised, as it covers them all), for
-    /// their toggles in the status bar: the sidebar, the editor, and the tickets when ClickUp is
+    /// their toggles in the status bar: the sidebar, the editor, and the tickets when a tracker is
     /// connected.
     pub fn panels_shown(&self) -> (bool, bool, Option<bool>) {
         let panels = self.panels.on_screen(self.layout.maximized.is_some());
-        (panels.sidebar, panels.editor, self.clickup.connected().then_some(panels.tickets))
+        (panels.sidebar, panels.editor, self.trackers.connected().then_some(panels.tickets))
     }
 
     /// Where the repo showing works, after its tab: the worktree when the sidebar follows a pane
@@ -4562,7 +4675,7 @@ impl Workspace {
                     .rounded_l(theme::corner(radius::RADIUS_MD))
                     .child("New agent")
                     .on_click(cx.listener(|this, _, window, cx| {
-                        ticket_picker::open(cx.weak_entity(), this.clickup.connected(), window, cx);
+                        ticket_picker::open(cx.weak_entity(), this.trackers.connected(), window, cx);
                     })),
             )
             .child(
@@ -4968,7 +5081,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)))
             .on_action(cx.listener(|this, _: &SaveFile, _, cx| this.save_file(cx)))
             .on_action(cx.listener(|this, _: &OpenTicketPicker, window, cx| {
-                ticket_picker::open(cx.weak_entity(), this.clickup.connected(), window, cx);
+                ticket_picker::open(cx.weak_entity(), this.trackers.connected(), window, cx);
             }))
             .on_action(
                 cx.listener(|this, _: &FocusPane1, window, cx| this.update_layout(window, cx, |l| l.focus_nth(1))),

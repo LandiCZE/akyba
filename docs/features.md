@@ -188,8 +188,10 @@ Each pane shows whether its agent is working, waiting for you, done or failed.
 
 ## Tickets (optional)
 
-Connect a ClickUp token, and New agent (⌘⇧N) also searches the tickets assigned to you; ⌘⌥B shows
-them as a panel on the right, with filters for status, priority, due date, space, list and tag. Pick
+Connect ClickUp, YouTrack or both (YouTrack Cloud or a server of your own: type its address and a
+permanent token), and New agent (⌘⇧N) also searches the open tickets assigned to you; ⌘⌥B shows
+them as a panel on the right, with filters for status, priority, due date, space or project, list
+and tag. Pick
 one, and Akyba opens a pane (in its own worktree if you like) and starts your agent on it. Without a
 tracker, New agent starts work you name, and the rest doesn't show up.
 

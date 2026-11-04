@@ -1,10 +1,10 @@
 //! New agent (⌘⇧N): name the work and Akyba starts an agent on it in a worktree of its own; with
-//! ClickUp connected, the same field searches your open tickets, grouped by status, and picking one
+//! ClickUp or YouTrack connected, the same field searches your open tickets, grouped by status, and picking one
 //! starts an agent on it the way the project's ticket settings say. Return with nothing typed
 //! starts the agent here, with no task.
 
-use akyba_core::clickup::{self, Ticket};
 use akyba_core::git;
+use akyba_core::tickets::{self, Ticket};
 use akyba_design::{color, radius, space};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::input::InputState;
@@ -19,7 +19,7 @@ use crate::workspace::Workspace;
 use akyba_design::icon;
 use akyba_design::text;
 
-/// Opens the dialog. `connected` says whether ClickUp is, given by the caller: the workspace opens
+/// Opens the dialog. `connected` says whether a tracker is, given by the caller: the workspace opens
 /// this from inside its own update, where reading it would abort.
 pub fn open(workspace: WeakEntity<Workspace>, connected: bool, window: &mut Window, cx: &mut App) {
     let placeholder = if connected { "Name the work, or search your tickets" } else { "Name the work, like fix-login" };
@@ -37,10 +37,10 @@ pub fn open(workspace: WeakEntity<Workspace>, connected: bool, window: &mut Wind
         let Some(workspace) = workspace.upgrade() else { return dialog };
         let query = search.read(cx).value().to_string();
         let rows = picks(&workspace, &query, cx);
-        let state = workspace.read(cx).clickup();
-        let note = if let Some(problem) = state.problem.clone().filter(|_| state.connected()) {
+        let state = workspace.read(cx).trackers();
+        let note = if let Some(problem) = state.problem().filter(|_| state.connected()) {
             Some(problem)
-        } else if state.loading && rows.is_empty() {
+        } else if state.loading() && rows.is_empty() {
             Some("Reading your tickets…".to_owned())
         } else if rows.is_empty() && state.connected() {
             Some("No open tickets assigned to you. Type a name to start without one.".to_owned())
@@ -133,7 +133,7 @@ enum Pick {
 /// The rows for `query`: the tickets it matches, and the typed name as work of its own, first when
 /// no ticket matches so that Return starts it.
 fn picks(workspace: &Entity<Workspace>, query: &str, cx: &App) -> Vec<Pick> {
-    let tickets = workspace.read(cx).clickup().tickets.iter().filter(|ticket| ticket.matches(query)).cloned();
+    let tickets = workspace.read(cx).trackers().tickets().filter(|ticket| ticket.matches(query)).cloned();
     let mut picks: Vec<Pick> = tickets.map(|ticket| Pick::Ticket(Box::new(ticket))).collect();
     let name = query.trim();
     if !git::branch_for(name).is_empty() {
@@ -169,7 +169,7 @@ fn kind_row(cx: &App) -> Option<impl IntoElement + use<>> {
     )
 }
 
-/// One quiet line at the foot: what Return does now, and, without ClickUp, where tickets come from.
+/// One quiet line at the foot: what Return does now, and, without a tracker, where tickets come from.
 fn footer(query: &str, connected: bool, cx: &App) -> impl IntoElement {
     let agent = crate::agent_choice::current(cx).name();
     let does = if query.trim().is_empty() {
@@ -186,7 +186,9 @@ fn footer(query: &str, connected: bool, cx: &App) -> impl IntoElement {
         .text_scale(text::META)
         .text_color(theme::color(color::INK_FAINT))
         .child(div().min_w_0().truncate().child(does))
-        .when(!connected, |footer| footer.child(div().flex_none().child("Tickets: connect ClickUp in Settings")))
+        .when(!connected, |footer| {
+            footer.child(div().flex_none().child("Tickets: connect ClickUp or YouTrack in Settings"))
+        })
 }
 
 fn list(workspace: &Entity<Workspace>, picks: &[Pick], cx: &App) -> impl IntoElement {
@@ -208,7 +210,7 @@ fn list(workspace: &Entity<Workspace>, picks: &[Pick], cx: &App) -> impl IntoEle
     if named_first && let Some(name) = &named {
         rows = rows.child(name_row(workspace, name, cx));
     }
-    for (status, group) in clickup::by_status(&tickets) {
+    for (status, group) in tickets::by_status(&tickets) {
         rows = rows.child(
             div()
                 .pt(len(space::SPACE_3))
@@ -318,7 +320,7 @@ fn row(workspace: &Entity<Workspace>, ticket: &Ticket) -> impl IntoElement {
         })
 }
 
-/// A dot in the status's own ClickUp colour, so statuses read as they do in ClickUp.
+/// A dot in the status's own colour in its tracker, so statuses read as they do there.
 pub fn status_dot(ticket: &Ticket) -> impl IntoElement {
     let colour = ticket
         .status_color

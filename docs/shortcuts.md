@@ -23,7 +23,7 @@
 | ⌘.           | Quick fixes, Find references, Rename                 |
 | ⌘,           | Settings                                             |
 | ⌘⇧N          | New agent, in a worktree of its own                  |
-| ⌘⌥B          | Show or hide your tickets (ClickUp)                  |
+| ⌘⌥B          | Show or hide your tickets (ClickUp, YouTrack)        |
 | ⌘⇧B          | Best of N: one task, several agents                  |
 | ⌘⌥S          | Send to several agents                               |
 | ⌘⌥C          | Compare attempts                                     |
