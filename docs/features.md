@@ -118,6 +118,8 @@ Each pane shows whether its agent is working, waiting for you, done or failed.
 - Syntax highlighting for about 60 languages, saved with your project's own formatter (Prettier,
   Biome, oxfmt or rustfmt).
 - Files an agent changes reload by themselves; if you have unsaved edits, Akyba asks first.
+- Pictures open as pictures (PNG, JPEG, GIF, WebP, SVG and the like), a screenshot an agent took, say:
+  click one in the tree or find it with ⌘P. Maximise the panel to see it larger.
 - Language servers for TypeScript and JavaScript, Rust, Python and Go: completions, hover, go to
   definition (⌘-click), quick fixes, Find references and Rename (⌘.), and errors as you type. For
   TypeScript, Akyba installs one with a click when there's none.

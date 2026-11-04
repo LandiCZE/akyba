@@ -14,8 +14,8 @@ use gpui_kit::component::diff::{Diff, DiffFile, DiffMode, DiffState};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, InputState};
 use gpui_kit::{
     AnyElement, AppContext as _, Context, Entity, EventEmitter, FontWeight, InteractiveElement as _, IntoElement,
-    MouseButton, ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window,
-    div, prelude::FluentBuilder as _, px,
+    MouseButton, ObjectFit, ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, StyledImage as _,
+    Subscription, Task, Window, div, img, prelude::FluentBuilder as _, px,
 };
 
 use gpui_kit::component::tooltip::Tooltip;
@@ -49,6 +49,8 @@ struct OpenFile {
     language: Option<Status>,
     /// Asking its server for its problems, a moment after the last change.
     pull: Option<Task<()>>,
+    /// A picture (a screenshot an agent took, say), shown rather than edited; its text stays empty.
+    image: bool,
     _changes: Subscription,
 }
 
@@ -173,7 +175,10 @@ impl EditorView {
             cx.notify();
             return;
         }
+        let image = is_image(path);
         let text = match std::fs::metadata(path) {
+            // A picture is drawn, not read as text, however large.
+            Ok(_) if image => Ok(String::new()),
             Ok(meta) if meta.len() > MAX_SIZE => Err(format!("{} is too large to edit here", display_name(path))),
             Ok(_) => std::fs::read_to_string(path).map_err(|_| format!("{} is not a text file", display_name(path))),
             Err(error) => Err(format!("{}: {error}", display_name(path))),
@@ -205,7 +210,7 @@ impl EditorView {
                 cx.notify();
             }
         });
-        let language = self.start_language(path, &text, &state, cx);
+        let language = if image { None } else { self.start_language(path, &text, &state, cx) };
         self.files.push(OpenFile {
             path: path.to_owned(),
             state,
@@ -213,6 +218,7 @@ impl EditorView {
             changed_on_disk: false,
             language,
             pull: None,
+            image,
             _changes: changes,
         });
         self.active = self.files.len() - 1;
@@ -256,6 +262,9 @@ impl EditorView {
         let (errors, warnings) = problems_view::counts(&self.problems);
         let mut status = EditorStatus { errors, warnings, ..EditorStatus::default() };
         let Some(file) = self.files.get(self.active).filter(|_| self.front == Front::File) else { return status };
+        if file.image {
+            return status;
+        }
         let position = file.state.read(cx).cursor_position();
         status.cursor = Some((position.line + 1, position.character + 1));
         status.language = Some(language_name(language_for(&file.path)));
@@ -738,7 +747,8 @@ impl EditorView {
     /// Files changed on disk: an open copy without unsaved changes reloads; one with them asks.
     pub fn files_changed(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
         for file in &mut self.files {
-            if !paths.contains(&file.path) {
+            // A picture is drawn from disk, so it's always the newest.
+            if file.image || !paths.contains(&file.path) {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(&file.path) else { continue };
@@ -1022,7 +1032,8 @@ impl EditorView {
         if self.front != Front::File {
             return;
         }
-        let Some(file) = self.files.get_mut(self.active) else { return };
+        // A picture is never written: its text is empty.
+        let Some(file) = self.files.get_mut(self.active).filter(|file| !file.image) else { return };
         let text = file.state.read(cx).value().to_string();
         let mut server = None;
         match std::fs::write(&file.path, &text) {
@@ -1531,10 +1542,12 @@ impl EditorView {
             Front::Impact => shown(self.impact.as_ref()),
             Front::References => shown(self.references.as_ref()),
             Front::Problems => shown(self.problems_view.as_ref()),
-            Front::File => self
-                .files
-                .get(self.active)
-                .map(|file| Editor::new(&file.state).appearance(false).bordered(false).size_full().into_any_element()),
+            Front::File => self.files.get(self.active).map(|file| {
+                if file.image {
+                    return render_image(&file.path);
+                }
+                Editor::new(&file.state).appearance(false).bordered(false).size_full().into_any_element()
+            }),
         }
     }
 }
@@ -1664,6 +1677,27 @@ fn language_name(grammar: &str) -> String {
     }
     let mut chars = grammar.chars();
     chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
+/// Pictures the panel shows instead of editing, by their extension.
+fn is_image(path: &Path) -> bool {
+    let extension = path.extension().map(|extension| extension.to_string_lossy().to_lowercase());
+    matches!(
+        extension.as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tiff" | "tif" | "ico" | "svg")
+    )
+}
+
+/// A picture, whole and as large as the panel lets it be without growing past its own size.
+fn render_image(path: &Path) -> AnyElement {
+    div()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .p(len(space::SPACE_4))
+        .child(img(path.to_owned()).max_w_full().max_h_full().object_fit(ObjectFit::ScaleDown))
+        .into_any_element()
 }
 
 fn display_name(path: &Path) -> String {
