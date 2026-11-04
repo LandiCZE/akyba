@@ -244,6 +244,22 @@ fn main() {
             workspace::in_front(cx, |_, window, cx| palette::commands(window, cx));
         });
         set_menus(cx);
+        // A new version shows in every window's status bar, never in a window of its own.
+        cx.set_global(updates::Notice::default());
+        let (news, heard) = async_channel::unbounded();
+        updates::on_news(news);
+        cx.spawn(async move |cx| {
+            while let Ok(waiting) = heard.recv().await {
+                cx.update(|cx| {
+                    cx.set_global(updates::Notice(waiting));
+                    cx.refresh_windows();
+                });
+            }
+        })
+        .detach();
+        if let Ok(version) = std::env::var("AKYBA_FAKE_UPDATE") {
+            updates::fake(&version);
+        }
 
         for project in projects {
             open_main_window(project, cx);

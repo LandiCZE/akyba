@@ -1,6 +1,6 @@
 //! The status bar along the window's foot: on the left, the errors and warnings and the file's
 //! language server; on the right, the cursor, the file's language, and the branch with how far it
-//! is ahead of and behind its upstream. A slim card, like the panes, so it reads over any
+//! is ahead of and behind its upstream, and a new version of Akyba when one waits. A slim card, like the panes, so it reads over any
 //! desktop; the counts and the branch are buttons.
 
 use std::path::{Path, PathBuf};
@@ -256,6 +256,34 @@ impl StatusBar {
     }
 }
 
+impl StatusBar {
+    /// A new version, last in the bar, where it waits for you instead of interrupting: "Restart
+    /// to update" once downloaded, else the version, which shows Sparkle's window.
+    fn render_update(cx: &App) -> Option<AnyElement> {
+        let (label, tip) = match crate::updates::waiting(cx)? {
+            crate::updates::Waiting::Ready(version) => (
+                "Restart to update".to_owned(),
+                format!("Akyba {version} is downloaded; restarting installs it and reopens your agents"),
+            ),
+            crate::updates::Waiting::Available(version) => {
+                (format!("Update to {version}"), format!("Akyba {version} is out; see what's new and install it"))
+            }
+        };
+        let blue = theme::color(color::BLUE);
+        Some(
+            Self::item("status-update")
+                .cursor_pointer()
+                .text_color(blue)
+                .hover(|s| s.bg(theme::fill_hover()))
+                .child(chrome::icon("circle-arrow-down", icon::SM, blue))
+                .child(label)
+                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                .on_click(|_, _, _| crate::updates::act())
+                .into_any_element(),
+        )
+    }
+}
+
 impl Render for StatusBar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let status = self.editor.read(cx).status(cx);
@@ -292,5 +320,6 @@ impl Render for StatusBar {
             )
             .children(status.language.map(|language| Self::item("status-language").child(language)))
             .children(self.render_branch(cx))
+            .children(Self::render_update(cx))
     }
 }

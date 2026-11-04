@@ -73,7 +73,8 @@ Open the disk image and drag Akyba to Applications. It runs on macOS 13 or newer
 > Akyba isn't notarised by Apple (it has no Apple Developer ID), so the first time you open it,
 > click **Done**, then **Open Anyway** in System Settings → Privacy & Security. Only once.
 
-Akyba updates itself: once a day it checks for a new release and offers it. To build it from the
+Akyba updates itself: once a day it looks for a new release and downloads it quietly, and the
+status bar offers **Restart to update**. No window pops up. To build it from the
 code, see [Develop](docs/develop.md).
 
 ## The shortcuts that matter
